@@ -100,13 +100,19 @@ async def main() -> None:
     await init_db()
 
     # ---------- 1) 模型/时长常量 ----------
-    assert config.I2V_VIDEO_MODEL == "wan2.6-i2v-flash", config.I2V_VIDEO_MODEL
+    # 默认 i2v 模型改为供应商实际存在的 wan2.6-i2v（旧 wan2.6-i2v-flash 上游不存在）。
+    assert config.I2V_VIDEO_MODEL == "wan2.6-i2v", config.I2V_VIDEO_MODEL
     assert config.I2V_VIDEO_DURATION_SECONDS == 15, config.I2V_VIDEO_DURATION_SECONDS
     # 既有模型未被替换
     assert config.IMAGE_MODEL == "gpt-image-2", config.IMAGE_MODEL
     assert config.TEXT_IMAGE_MODEL == "flux-1.1-pro", config.TEXT_IMAGE_MODEL
     assert config.IMAGE_TEXT_MODEL == "flux.1-kontext-pro", config.IMAGE_TEXT_MODEL
-    print("[ok] 常量：I2V_VIDEO_MODEL=wan2.6-i2v-flash, 时长=15, 既有 image/text 模型未改")
+    # 降级链常量存在且为非空列表
+    assert isinstance(config.TEXT_IMAGE_FALLBACK_MODELS, list) and config.TEXT_IMAGE_FALLBACK_MODELS
+    assert isinstance(config.IMAGE_EDIT_FALLBACK_MODELS, list) and config.IMAGE_EDIT_FALLBACK_MODELS
+    assert isinstance(config.I2V_ENDPOINT_PATHS, list) and config.I2V_ENDPOINT_PATHS
+    assert "wan2.6-i2v" in config.I2V_VIDEO_FALLBACK_MODELS
+    print("[ok] 常量：I2V_VIDEO_MODEL=wan2.6-i2v, 时长=15, 既有 image/text 模型未改, 降级链就位")
 
     import services.video_generation_service as vsvc
 
@@ -126,12 +132,12 @@ async def main() -> None:
     with patch.object(vsvc, "client", _make_fake_client(_post_url)):
         out = await vsvc.generate_video_from_image("镜头推近", reference_path=ref)
         assert out["ok"] and out["url"] == "https://x/out.mp4", out
-        # 时长 15 + 模型 透传到 body
-        assert posted["body"]["model"] == "wan2.6-i2v-flash", posted["body"]
+        # 时长 15 + 模型 透传到 body（默认 wan2.6-i2v）
+        assert posted["body"]["model"] == "wan2.6-i2v", posted["body"]
         assert posted["body"]["duration"] == 15, posted["body"]
         assert posted["body"]["image"].startswith("data:image/jpeg;base64,")
         assert "videos/generations" in posted["url"]
-    print("[ok] service 同步 url：抠出 url，model/duration=15/image 正确透传")
+    print("[ok] service 同步 url：抠出 url，model=wan2.6-i2v/duration=15/image 正确透传")
 
     # ---------- 2b) 同步返回 b64 ----------
     import base64 as _b64
@@ -189,6 +195,46 @@ async def main() -> None:
         assert out["ok"] is False, out
         assert "不支持" in (out["error"] or ""), out
     print("[ok] service 上游不支持(404)：ok=False + 不暴露后端细节，不抛异常")
+
+    # ---------- 2f-2) 首选端点 404，第二个端点路径成功 → 端点降级 ----------
+    seen_paths = []
+
+    async def _post_path_fallback(url, json=None, headers=None):
+        seen_paths.append(url)
+        # 第一个端点路径 videos/generations 返回 404，换下一个路径才成功
+        if "videos/generations" in url:
+            return _FakeResp({"error": "not found"}, status_code=404)
+        return _FakeResp({"data": [{"url": "https://x/path2.mp4"}]})
+
+    with patch.object(vsvc, "client", _make_fake_client(_post_path_fallback)):
+        out = await vsvc.generate_video_from_image("动起来", reference_path=ref)
+        assert out["ok"] and out["url"] == "https://x/path2.mp4", out
+        assert any("videos/generations" in u for u in seen_paths), seen_paths
+        assert len(seen_paths) >= 2, seen_paths
+    print("[ok] service 端点降级：首选 404 → 自动换下一个端点路径出片")
+
+    # ---------- 2f-3) 模型被拒(429) → 换备用模型成功 ----------
+    sys.modules.pop("config", None)
+    os.environ["I2V_VIDEO_FALLBACK_MODELS"] = "wan2.6-i2v,wan-backup-model"
+    import importlib
+    importlib.reload(vsvc)
+    seen_models = []
+
+    async def _post_model_fallback(url, json=None, headers=None):
+        seen_models.append(json["model"])
+        # 主模型 wan2.6-i2v 全部端点都 429（模型被拒），备用模型才成功
+        if json["model"] == "wan2.6-i2v":
+            return _FakeResp({"error": "rate limit exceeded"}, status_code=429)
+        return _FakeResp({"data": [{"url": "https://x/model2.mp4"}]})
+
+    with patch.object(vsvc, "client", _make_fake_client(_post_model_fallback)):
+        out = await vsvc.generate_video_from_image("动起来", reference_path=ref)
+        assert out["ok"] and out["url"] == "https://x/model2.mp4", out
+        assert "wan2.6-i2v" in seen_models and "wan-backup-model" in seen_models, seen_models
+    print("[ok] service 模型降级：主模型 429 → 自动换备用模型出片")
+    del os.environ["I2V_VIDEO_FALLBACK_MODELS"]
+    sys.modules.pop("config", None)
+    importlib.reload(vsvc)
 
     # ---------- 2g) 无参考图 / 空描述 ----------
     with patch.object(vsvc, "client", _make_fake_client(_post_url)):
