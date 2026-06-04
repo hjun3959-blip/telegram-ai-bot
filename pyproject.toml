@@ -1,0 +1,41 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 140
+exclude = [
+  ".git",
+  ".venv",
+  "venv",
+  "env",
+  "__pycache__",
+  "logs",
+  "docs/codegraph/codegraph.json",
+]
+
+[tool.ruff.lint]
+select = [
+  "E",
+  "F",
+  "I",
+  "UP",
+  "B",
+  "SIM",
+]
+ignore = [
+  "E501",
+]
+
+[tool.bandit]
+exclude_dirs = [
+  ".git",
+  ".venv",
+  "venv",
+  "env",
+  "__pycache__",
+  "logs",
+  "scripts",
+  "docs",
+]
+skips = [
+  "B101",
+]
+
