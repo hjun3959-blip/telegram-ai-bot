@@ -28,6 +28,8 @@ path_filters:
   - "!logs/**"
   - "!*.sqlite3"
   - "!bot_data.sqlite3*"
+  - "!tmp/**"
   - "!temp_*"
   - "!frames_*"
+  - "!plog_cache/**"
 
