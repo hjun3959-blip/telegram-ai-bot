@@ -923,15 +923,17 @@ async def _maybe_prompt_copyfix_for_sticker(message: Message, bot: Bot, scope: s
     pending = get_pending_style(message.from_user.id)
     if not pending or pending.tool != "copyfix":
         return False
+    send_success = False
     try:
         await bot.send_message(message.chat.id, COPYFIX_STICKER_PROMPT)
+        send_success = True
     except Exception as e:
         logger.warning("copyfix sticker prompt send failed | err=%s", e)
     try:
         await store_message(message, "outgoing", "[文案优化:等待文案，已收到表情]", "system_cmd", scope=scope)
     except Exception:
         pass
-    return True
+    return send_success
 
 
 async def _handle_sticker_or_gif(message: Message, bot: Bot):

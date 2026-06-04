@@ -1164,6 +1164,9 @@ async def _send_text_tool(bot: Bot, message: Message, tool: str, arg: str, *, si
             set_pending_style(message.from_user.id, "copyfix", "频道发布")
         await send_long_text(bot, message.chat.id, _TOOL_HINTS[tool])
         return
+    # 用户明确提供了参数（显式调用），清除之前设置的 pending 状态
+    if tool == "copyfix" and message.from_user:
+        clear_pending_style(message.from_user.id)
     # P0：先回一句状态提示（除非调用方已发过风格感知文案）
     if not silent_status:
         await send_long_text(bot, message.chat.id, STATUS_TEXT_TOOL)
