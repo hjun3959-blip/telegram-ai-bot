@@ -178,13 +178,38 @@ IMAGE_MODEL = _env_str("IMAGE_MODEL", "gpt-image-2") or "gpt-image-2"
 TEXT_IMAGE_MODEL = _env_str("TEXT_IMAGE_MODEL", "flux-1.1-pro") or "flux-1.1-pro"
 # IMAGE_TEXT_MODEL：图 + 文字生图/改图（/改图 等）专用模型，默认 flux.1-kontext-pro；可通过 env 覆盖。
 IMAGE_TEXT_MODEL = _env_str("IMAGE_TEXT_MODEL", "flux.1-kontext-pro") or "flux.1-kontext-pro"
-# I2V_VIDEO_MODEL：图生视频（图 + 文字 → 短视频）专用模型，默认 wan2.6-i2v-flash；可通过 env 覆盖。
+# 文生图降级链：主模型 429 / model_not_found / 上游饱和时，按顺序尝试这些实际可用的模型。
+# 默认用供应商真实存在的 qwen-image 系列；可通过 env 覆盖（逗号分隔）。
+TEXT_IMAGE_FALLBACK_MODELS = _env_list(
+    "TEXT_IMAGE_FALLBACK_MODELS",
+    ["qwen-image-2.0-pro", "qwen-image-2.0", "doubao-seedream-4-0-250828"],
+)
+# 图改图（image edit）降级链：edit 主模型失败时，按顺序尝试这些实际可用的 edit 模型。
+# qwen-image-edit-plus 支持图+文字编辑；其余作为最后兜底。可通过 env 覆盖（逗号分隔）。
+IMAGE_EDIT_FALLBACK_MODELS = _env_list(
+    "IMAGE_EDIT_FALLBACK_MODELS",
+    ["qwen-image-edit-plus", "qwen-image-2.0-pro", "doubao-seedream-4-0-250828"],
+)
+# I2V_VIDEO_MODEL：图生视频（图 + 文字 → 短视频）专用模型，默认 wan2.6-i2v（供应商实际存在的型号，
+# 此前的 wan2.6-i2v-flash 上游不存在）；可通过 env 覆盖。
 # 仅用于私信功能区的「图生 15 秒视频」娱乐功能；不影响任何 image/text 模型与 Business 路径。
-I2V_VIDEO_MODEL = _env_str("I2V_VIDEO_MODEL", "wan2.6-i2v-flash") or "wan2.6-i2v-flash"
+I2V_VIDEO_MODEL = _env_str("I2V_VIDEO_MODEL", "wan2.6-i2v") or "wan2.6-i2v"
 # 兼容别名：IMAGE_TO_VIDEO_MODEL 若显式配置则覆盖 I2V_VIDEO_MODEL（二者指同一功能）。
 _image_to_video_model = _env_str("IMAGE_TO_VIDEO_MODEL", "")
 if _image_to_video_model:
     I2V_VIDEO_MODEL = _image_to_video_model
+# 图生视频接口路径降级链：不同中转的视频接口路径不一致，按顺序尝试，命中（非 404/405）即用。
+# 旧代码只试 videos/generations（部分中转返回 404）；这里补上常见别名路径。可通过 env 覆盖。
+I2V_ENDPOINT_PATHS = _env_list(
+    "I2V_ENDPOINT_PATHS",
+    ["videos/generations", "video/generations", "videos/generate", "images/generations"],
+)
+# 图生视频模型降级链：主模型被上游拒绝（429 / model_not_found）时按顺序尝试。
+# 默认仅含实际存在的 wan2.6-i2v；可通过 env 覆盖（逗号分隔）。
+I2V_VIDEO_FALLBACK_MODELS = _env_list(
+    "I2V_VIDEO_FALLBACK_MODELS",
+    ["wan2.6-i2v"],
+)
 # I2V_VIDEO_DURATION_SECONDS：图生视频默认时长（秒），默认 15。
 I2V_VIDEO_DURATION_SECONDS = _env_int("I2V_VIDEO_DURATION_SECONDS", 15, min_value=1)
 # I2V_POLL_TIMEOUT_SECONDS：异步任务（返回 task/job id）时的轮询总超时（秒），默认 180。

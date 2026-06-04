@@ -19,11 +19,57 @@ import base64
 import os
 from typing import Any
 
-from config import IMAGE_MODEL, IMAGE_TEXT_MODEL, TEXT_IMAGE_MODEL
+from config import (
+    IMAGE_EDIT_FALLBACK_MODELS,
+    IMAGE_MODEL,
+    IMAGE_TEXT_MODEL,
+    TEXT_IMAGE_FALLBACK_MODELS,
+    TEXT_IMAGE_MODEL,
+)
 from services.openai_service import client
 from utils.logger import setup_logging
 
 logger = setup_logging()
+
+
+def _is_retryable_upstream_error(err: Exception) -> bool:
+    """判断异常是否值得换一个模型重试（上游饱和 / 模型不存在 / 限流）。
+
+    典型场景：主模型返回 429（Too Many Requests / 上游饱和）或 model_not_found
+    （404 / 400 + "model not found"）。这些都说明「这个模型此刻用不了」，换一个
+    实际可用的模型很可能就成功；而 401/403（鉴权）/ 5xx（服务端故障）换模型无意义。
+    """
+    status = getattr(err, "status_code", None) or getattr(getattr(err, "response", None), "status_code", None)
+    if status in (429, 404):
+        return True
+    text = str(err).lower()
+    return any(
+        k in text
+        for k in (
+            "model_not_found",
+            "model not found",
+            "does not exist",
+            "no such model",
+            "unsupported model",
+            "rate limit",
+            "too many requests",
+            "429",
+            "saturat",
+            "overload",
+        )
+    )
+
+
+def _dedup_models(*groups: Any) -> list[str]:
+    """把若干模型名（单个字符串或列表）按出现顺序去重、去空，合成一条尝试链。"""
+    out: list[str] = []
+    for g in groups:
+        candidates = [g] if isinstance(g, str) else list(g or [])
+        for m in candidates:
+            name = (m or "").strip()
+            if name and name not in out:
+                out.append(name)
+    return out
 
 
 async def generate_image(
@@ -49,41 +95,50 @@ async def generate_image(
     if not text:
         return {"ok": False, "url": None, "data": None, "error": "prompt 为空"}
 
-    use_model = (model or TEXT_IMAGE_MODEL)
-    try:
-        # 一些兼容服务不接受 response_format 参数，因此不强制传；
-        # 由服务端决定返回 url 还是 b64_json，我们两种都兼容。
-        response = await client.images.generate(
-            model=use_model,
-            prompt=text,
-            size=size,
-            n=n,
-        )
-    except Exception as e:
-        # 不打印 prompt，只记录模型名与异常类型
-        logger.exception("Image generation failed | model=%s | err=%s", use_model, e)
-        return {"ok": False, "url": None, "data": None, "error": "图片生成失败，稍后再试"}
+    # 尝试链：调用方指定的 model（或默认 TEXT_IMAGE_MODEL）排第一，
+    # 主模型遇到 429 / model_not_found / 上游饱和时，依次降级到实际可用的备用模型。
+    primary = (model or TEXT_IMAGE_MODEL)
+    model_chain = _dedup_models(primary, TEXT_IMAGE_FALLBACK_MODELS)
 
-    try:
-        data_list = getattr(response, "data", None) or []
-        if not data_list:
-            return {"ok": False, "url": None, "data": None, "error": "图片生成返回为空"}
-        first = data_list[0]
-        url = getattr(first, "url", None)
-        if url:
-            return {"ok": True, "url": url, "data": None, "error": None}
-        b64 = getattr(first, "b64_json", None)
-        if b64:
-            try:
-                raw = base64.b64decode(b64)
-                return {"ok": True, "url": None, "data": raw, "error": None}
-            except Exception as decode_err:
-                logger.exception("Image b64 decode failed | err=%s", decode_err)
-                return {"ok": False, "url": None, "data": None, "error": "图片解析失败"}
-        return {"ok": False, "url": None, "data": None, "error": "图片返回格式异常"}
-    except Exception as e:
-        logger.exception("Image response parse failed | err=%s", e)
-        return {"ok": False, "url": None, "data": None, "error": "图片生成失败，稍后再试"}
+    last_error = "图片生成失败，稍后再试"
+    for idx, use_model in enumerate(model_chain):
+        try:
+            # 一些兼容服务不接受 response_format 参数，因此不强制传；
+            # 由服务端决定返回 url 还是 b64_json，我们两种都兼容。
+            response = await client.images.generate(
+                model=use_model,
+                prompt=text,
+                size=size,
+                n=n,
+            )
+        except Exception as e:
+            # 不打印 prompt，只记录模型名与异常类型
+            retryable = _is_retryable_upstream_error(e)
+            has_more = idx < len(model_chain) - 1
+            if retryable and has_more:
+                logger.warning(
+                    "Image generation failed, trying fallback model | model=%s | err_type=%s",
+                    use_model,
+                    type(e).__name__,
+                )
+                continue
+            logger.exception("Image generation failed | model=%s | err=%s", use_model, e)
+            return {"ok": False, "url": None, "data": None, "error": last_error}
+
+        parsed = _parse_image_response(response)
+        if parsed.get("ok"):
+            return parsed
+        # 解析为空/格式异常：换下一个模型可能恢复，否则返回该错误。
+        last_error = parsed.get("error") or last_error
+        if idx < len(model_chain) - 1:
+            logger.warning(
+                "Image generation empty/invalid, trying fallback model | model=%s",
+                use_model,
+            )
+            continue
+        return parsed
+
+    return {"ok": False, "url": None, "data": None, "error": last_error}
 
 
 def _parse_image_response(response: Any) -> dict[str, Any]:
@@ -162,39 +217,63 @@ async def generate_image_from_reference(
         logger.info("client.images.edit not available, fallback to images.generate")
         return await _fallback()
 
-    # 真正尝试 image edit
-    try:
-        # 用同步 open + 异步包装；OpenAI SDK 支持文件对象/bytes
-        def _open_image() -> Any:
-            return open(reference_path, "rb")
+    # edit 尝试链：主 edit 模型排第一，遇到 429 / model_not_found / 上游饱和时
+    # 依次降级到实际可用的 edit 模型（如 qwen-image-edit-plus）。全部失败后才降级到
+    # 纯文字生图（_fallback）。signature 不匹配/SDK 不支持 → 直接走 text2image。
+    edit_chain = _dedup_models(edit_model, IMAGE_EDIT_FALLBACK_MODELS)
 
-        loop = asyncio.get_running_loop()
-        image_file = await loop.run_in_executor(None, _open_image)
+    def _open_image() -> Any:
+        return open(reference_path, "rb")
+
+    for idx, use_model in enumerate(edit_chain):
         try:
-            response = await edit_fn(
-                model=edit_model,
-                image=image_file,
-                prompt=text,
-                size=size,
-                n=1,
-            )
-        finally:
+            # 用同步 open + 异步包装；OpenAI SDK 支持文件对象/bytes
+            loop = asyncio.get_running_loop()
+            image_file = await loop.run_in_executor(None, _open_image)
             try:
-                image_file.close()
-            except Exception:
-                pass
+                response = await edit_fn(
+                    model=use_model,
+                    image=image_file,
+                    prompt=text,
+                    size=size,
+                    n=1,
+                )
+            finally:
+                try:
+                    image_file.close()
+                except Exception:
+                    pass
+        except (TypeError, AttributeError) as e:
+            # SDK / 中转根本不支持 image edit 入参 → 直接降级到纯文字生图。
+            logger.warning("images.edit signature mismatch, fallback to generate | err=%s", e)
+            return await _fallback()
+        except Exception as e:
+            retryable = _is_retryable_upstream_error(e)
+            has_more = idx < len(edit_chain) - 1
+            if retryable and has_more:
+                logger.warning(
+                    "images.edit failed, trying fallback edit model | model=%s | err_type=%s",
+                    use_model,
+                    type(e).__name__,
+                )
+                continue
+            # 不可重试，或已用尽 edit 模型：降级到纯文字生图。
+            logger.warning("images.edit failed, fallback to generate | err=%s", e)
+            return await _fallback()
+
         parsed = _parse_image_response(response)
-        if isinstance(parsed, dict):
+        if parsed.get("ok"):
             # 真正走了 image edit（保脸/保姿势的最佳路径）
             parsed.setdefault("fallback_to_text2image", False)
-        return parsed
-    except (TypeError, AttributeError) as e:
-        logger.warning("images.edit signature mismatch, fallback to generate | err=%s", e)
+            return parsed
+        # 返回空/格式异常：换下一个 edit 模型，用尽后降级到文字生图。
+        if idx < len(edit_chain) - 1:
+            logger.warning("images.edit empty/invalid, trying fallback edit model | model=%s", use_model)
+            continue
+        logger.warning("images.edit empty/invalid on all edit models, fallback to generate")
         return await _fallback()
-    except Exception as e:
-        # 上游不支持 / 4xx：降级
-        logger.warning("images.edit failed, fallback to generate | err=%s", e)
-        return await _fallback()
+
+    return await _fallback()
 
 
 async def generate_image_with_instruction(

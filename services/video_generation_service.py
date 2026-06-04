@@ -33,9 +33,11 @@ import os
 from typing import Any
 
 from config import (
+    I2V_ENDPOINT_PATHS,
     I2V_POLL_INTERVAL_SECONDS,
     I2V_POLL_TIMEOUT_SECONDS,
     I2V_VIDEO_DURATION_SECONDS,
+    I2V_VIDEO_FALLBACK_MODELS,
     I2V_VIDEO_MODEL,
 )
 from services.openai_service import client
@@ -160,6 +162,43 @@ def _is_unsupported_error(err: Exception) -> bool:
     return any(k in text for k in ("not found", "404", "405", "not support", "unsupported", "no such"))
 
 
+def _is_model_rejected(status: int, payload_text: str) -> bool:
+    """判断「接口存在但这个模型被拒」（429 限流 / model_not_found）。
+
+    与 _is_unsupported_error 区分：unsupported 说明该路径整个不可用（换路径），
+    model_rejected 说明路径可用但模型用不了（换模型）。
+    """
+    if status == 429:
+        return True
+    t = (payload_text or "").lower()
+    return any(
+        k in t
+        for k in (
+            "model_not_found",
+            "model not found",
+            "does not exist",
+            "no such model",
+            "unsupported model",
+            "rate limit",
+            "too many requests",
+            "saturat",
+            "overload",
+        )
+    )
+
+
+def _dedup(*groups: Any) -> list[str]:
+    """按出现顺序去重、去空，合成尝试链。"""
+    out: list[str] = []
+    for g in groups:
+        candidates = [g] if isinstance(g, str) else list(g or [])
+        for m in candidates:
+            name = (m or "").strip()
+            if name and name not in out:
+                out.append(name)
+    return out
+
+
 async def _post_json(path: str, body: dict[str, Any]) -> dict[str, Any]:
     """用 openai client 已鉴权的底层 httpx 通道 POST 一个 JSON。
 
@@ -194,16 +233,25 @@ async def _post_json(path: str, body: dict[str, Any]) -> dict[str, Any]:
     status = getattr(resp, "status_code", 0)
     if status in (404, 405, 501):
         logger.info("i2v endpoint unsupported | path=%s | status=%s", path, status)
-        return {"ok": False, "error": _ERR_UNSUPPORTED, "unsupported": True}
+        return {"ok": False, "error": _ERR_UNSUPPORTED, "unsupported": True, "model_rejected": False}
+
     if status >= 400:
+        # 读一点响应体用于区分「模型被拒」与「普通 4xx/5xx」，不打印给用户。
+        try:
+            body_text = resp.text if hasattr(resp, "text") else ""
+        except Exception:
+            body_text = ""
+        if _is_model_rejected(status, str(body_text)):
+            logger.info("i2v model rejected | path=%s | status=%s", path, status)
+            return {"ok": False, "error": _ERR_GENERIC, "unsupported": False, "model_rejected": True}
         logger.warning("i2v http error | path=%s | status=%s", path, status)
-        return {"ok": False, "error": _ERR_GENERIC, "unsupported": False}
+        return {"ok": False, "error": _ERR_GENERIC, "unsupported": False, "model_rejected": False}
 
     try:
         payload = resp.json()
     except Exception:
         logger.warning("i2v response not json | path=%s", path)
-        return {"ok": False, "error": _ERR_GENERIC, "unsupported": False}
+        return {"ok": False, "error": _ERR_GENERIC, "unsupported": False, "model_rejected": False}
     return {"ok": True, "payload": payload}
 
 
@@ -257,10 +305,13 @@ async def generate_video_from_image(
 ) -> dict[str, Any]:
     """图生视频主入口：一张参考图 + 一句描述 → 一段短视频。
 
-    - model 为空时默认 I2V_VIDEO_MODEL（wan2.6-i2v-flash）。
+    - model 为空时默认 I2V_VIDEO_MODEL（wan2.6-i2v），主模型被拒（429/model_not_found）
+      时按 I2V_VIDEO_FALLBACK_MODELS 依次降级。
+    - 端点路径按 I2V_ENDPOINT_PATHS 依次尝试：某路径 404/405 时换下一个路径，
+      兼容不同中转把视频接口挂在 videos/generations 之外的情况。
     - duration_seconds 为空时默认 I2V_VIDEO_DURATION_SECONDS（15 秒）。
     - 同步返回 url/b64 直接收口；返回 task/job id 时走 _poll_task 最小轮询。
-    - 上游不支持视频接口（404/405）→ ok=False + _ERR_UNSUPPORTED，绝不抛异常。
+    - 所有模型 × 路径都耗尽 → ok=False + 简短中文文案，绝不抛异常。
 
     返回统一结构 {"ok", "url", "data", "error"}。
     """
@@ -271,41 +322,75 @@ async def generate_video_from_image(
         logger.info("i2v missing reference image")
         return _result(False, error="没有可用的参考图，先发一张照片～")
 
-    use_model = (model or I2V_VIDEO_MODEL)
+    primary = (model or I2V_VIDEO_MODEL)
+    model_chain = _dedup(primary, I2V_VIDEO_FALLBACK_MODELS)
+    endpoint_paths = list(I2V_ENDPOINT_PATHS) or ["videos/generations"]
     duration = int(duration_seconds or I2V_VIDEO_DURATION_SECONDS)
 
     image_b64 = await _read_image_b64(reference_path)
     if not image_b64:
         return _result(False, error=_ERR_GENERIC)
 
-    body = {
-        "model": use_model,
-        "prompt": text,
-        "image": f"data:image/jpeg;base64,{image_b64}",
-        "duration": duration,
-    }
+    # 全部模型 × 全部端点路径都耗尽后给的最终文案：默认「上游不支持」，
+    # 若曾因模型被拒（429 / model_not_found）失败则改为通用「稍后再试」。
+    final_error = _ERR_UNSUPPORTED
+    saw_model_rejection = False
 
-    try:
-        posted = await _post_json("videos/generations", body)
-    except Exception as e:
-        logger.warning("i2v generate crashed | err_type=%s", type(e).__name__)
-        return _result(False, error=_ERR_GENERIC)
+    for use_model in model_chain:
+        body = {
+            "model": use_model,
+            "prompt": text,
+            "image": f"data:image/jpeg;base64,{image_b64}",
+            "duration": duration,
+        }
 
-    if not posted.get("ok"):
-        return _result(False, error=posted.get("error") or _ERR_GENERIC)
+        model_rejected = False
+        for path in endpoint_paths:
+            try:
+                posted = await _post_json(path, body)
+            except Exception as e:
+                logger.warning("i2v generate crashed | path=%s | err_type=%s", path, type(e).__name__)
+                final_error = _ERR_GENERIC
+                continue
 
-    payload = posted.get("payload")
+            if posted.get("ok"):
+                payload = posted.get("payload")
 
-    # 1) 同步直接出片
-    extracted = _extract_from_payload(payload)
-    if extracted:
-        return extracted
+                # 1) 同步直接出片
+                extracted = _extract_from_payload(payload)
+                if extracted:
+                    return extracted
 
-    # 2) 异步任务：拿到 task/job id → 轮询
-    task_id = _extract_task_id(payload)
-    if task_id:
-        return await _poll_task(task_id)
+                # 2) 异步任务：拿到 task/job id → 轮询
+                task_id = _extract_task_id(payload)
+                if task_id:
+                    return await _poll_task(task_id)
 
-    # 3) 既没结果也没任务 id：当空返回
-    logger.info("i2v empty payload | model=%s", use_model)
-    return _result(False, error=_ERR_EMPTY)
+                # 3) 既没结果也没任务 id：当空返回（这个路径/模型组合无效，继续试下一个路径）
+                logger.info("i2v empty payload | model=%s | path=%s", use_model, path)
+                final_error = _ERR_EMPTY
+                continue
+
+            # 模型被该路径明确拒绝（429 / model_not_found）：换模型而非换路径。
+            if posted.get("model_rejected"):
+                model_rejected = True
+                saw_model_rejection = True
+                final_error = posted.get("error") or _ERR_GENERIC
+                break
+
+            # 端点不支持（404/405）：试下一个端点路径。
+            if posted.get("unsupported"):
+                final_error = posted.get("error") or _ERR_UNSUPPORTED
+                continue
+
+            # 其它普通错误：记下文案，继续尝试下一个路径。
+            final_error = posted.get("error") or _ERR_GENERIC
+
+        if model_rejected:
+            # 当前模型被拒，换下一个模型重头试所有端点路径。
+            continue
+
+    if saw_model_rejection and final_error == _ERR_UNSUPPORTED:
+        final_error = _ERR_GENERIC
+    logger.info("i2v exhausted all models/endpoints")
+    return _result(False, error=final_error)
