@@ -1,8 +1,9 @@
 name: Dependabot Auto Merge
 
 on:
-  pull_request_target:
-    types: ["opened", "synchronize", "reopened", "ready_for_review"]
+  workflow_run:
+    workflows: ["CI"]
+    types: ["completed"]
 
 permissions:
   contents: write
@@ -10,15 +11,40 @@ permissions:
   checks: read
 
 jobs:
-  auto-merge:
-    name: Auto-merge Dependabot PRs
-    if: github.actor == 'dependabot[bot]' && !github.event.pull_request.draft
+  merge:
+    name: Merge green Dependabot PRs
+    if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
 
     steps:
-      - name: Enable auto-merge for Dependabot PR
+      - name: Find and merge matching Dependabot PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-        run: gh pr merge --auto --squash "$PR_URL"
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+
+          pr_number="$(gh pr list \
+            --repo "$REPO" \
+            --state open \
+            --json number,author,headRefOid \
+            --jq ".[] | select(.headRefOid == \"$HEAD_SHA\") | select(.author.login == \"app/dependabot\" or .author.login == \"dependabot[bot]\") | .number" \
+            | head -n 1)"
+
+          if [ -z "$pr_number" ]; then
+            echo "No matching open Dependabot PR for ${HEAD_SHA}."
+            exit 0
+          fi
+
+          echo "Found Dependabot PR #${pr_number}."
+          checks="$(gh pr checks "$pr_number" --repo "$REPO" || true)"
+          echo "$checks"
+
+          if echo "$checks" | grep -E "Python checks[[:space:]]+fail|Gitleaks[[:space:]]+fail"; then
+            echo "Required checks are failing; not merging."
+            exit 1
+          fi
+
+          gh pr merge "$pr_number" --repo "$REPO" --squash --delete-branch
 
