@@ -901,6 +901,39 @@ def _incoming_unique_id_and_type(message: Message) -> tuple[str | None, str]:
     return None, "sticker"
 
 
+COPYFIX_STICKER_PROMPT = (
+    "看到你发的表情啦～想优化文案的话，把要改的广告/频道文字发给我就行。\n"
+    "我会读懂这个表情想表达的情绪，帮你把这种感觉揉进优化后的文案里，不会改得干巴巴。"
+)
+
+
+async def _maybe_prompt_copyfix_for_sticker(message: Message, bot: Bot, scope: str) -> bool:
+    """private 文案优化流程里，用户只发了贴纸/GIF 没给正文时的提示。
+
+    命中条件：该用户有 pending 的 copyfix（即刚点过/发过「文案优化」）。
+    返回 True 表示已处理（提示已发，调用方应 return），且不消费 pending，
+    让用户紧接着发的文案仍进入优化流程。
+    """
+    if not message or not message.from_user:
+        return False
+    try:
+        from services.pending_style_service import get_pending_style
+    except Exception:
+        return False
+    pending = get_pending_style(message.from_user.id)
+    if not pending or pending.tool != "copyfix":
+        return False
+    try:
+        await bot.send_message(message.chat.id, COPYFIX_STICKER_PROMPT)
+    except Exception as e:
+        logger.warning("copyfix sticker prompt send failed | err=%s", e)
+    try:
+        await store_message(message, "outgoing", "[文案优化:等待文案，已收到表情]", "system_cmd", scope=scope)
+    except Exception:
+        pass
+    return True
+
+
 async def _handle_sticker_or_gif(message: Message, bot: Bot):
     if should_skip_message(message):
         return
@@ -927,6 +960,12 @@ async def _handle_sticker_or_gif(message: Message, bot: Bot):
 
     # business 非联系人静默：incoming 与素材都已入库，不调模型、不回复。
     if await _business_non_contact_check(message, "sticker_or_gif"):
+        return
+
+    # private 文案优化流程：用户在「文案优化」里只发了贴纸/GIF，没有正文。
+    # 提示先把文字发来，并说明可以保留这个表情风格。不消费 pending，
+    # 这样紧接着发的文案仍会进入优化流程。仅 private，不影响 business / 贝贝陪伴。
+    if mode == "private" and await _maybe_prompt_copyfix_for_sticker(message, bot, scope):
         return
 
     if is_xp:
