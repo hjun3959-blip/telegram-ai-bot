@@ -45,6 +45,9 @@ jobs:
 
       - name: Smoke tests
         timeout-minutes: 10
+        env:
+          OPENAI_API_KEY: "ci-dummy-openai-key"
+          TELEGRAM_TOKEN: "ci-dummy-telegram-token"
         run: |
           for test_file in scripts/smoke_test*.py; do
             echo "Running ${test_file}"

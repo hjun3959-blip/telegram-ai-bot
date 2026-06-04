@@ -1,0 +1,33 @@
+language: "zh-CN"
+
+tone_instructions: >
+  用中文输出。只指出可执行、会影响线上稳定性/安全/用户体验的问题。
+  不要为纯格式、命名喜好、无影响的风格问题刷屏。
+  对 Telegram Bot、异步 Python、SQLite、OpenAI/多模型调用、鉴权和隐私风险要更敏感。
+
+reviews:
+  profile: "assertive"
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  sequence_diagrams: true
+  request_changes_workflow: false
+
+auto_review:
+  enabled: true
+  drafts: false
+  base_branches:
+    - "master"
+    - "main"
+
+chat:
+  auto_reply: true
+
+path_filters:
+  - "!logs/**"
+  - "!*.sqlite3"
+  - "!bot_data.sqlite3*"
+  - "!temp_*"
+  - "!frames_*"
+
