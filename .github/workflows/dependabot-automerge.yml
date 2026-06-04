@@ -1,0 +1,24 @@
+name: Dependabot Auto Merge
+
+on:
+  pull_request_target:
+    types: ["opened", "synchronize", "reopened", "ready_for_review"]
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+
+jobs:
+  auto-merge:
+    name: Auto-merge Dependabot PRs
+    if: github.actor == 'dependabot[bot]' && !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Enable auto-merge for Dependabot PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$PR_URL"
+
