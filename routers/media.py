@@ -34,7 +34,15 @@ from services.context_service import (
     system_prompt_for_mode,
 )
 from services.history_service import trim_messages
-from services.media_service import encode_image_to_base64, extract_video_frames, run_ffmpeg, safe_remove, safe_rmtree
+from services.media_service import (
+    encode_image_to_base64,
+    extract_video_frames,
+    media_tmp_dir,
+    media_tmp_path,
+    run_ffmpeg,
+    safe_remove,
+    safe_rmtree,
+)
 from services.plog_service import remember_photo as plog_remember_photo
 from services.message_service import store_message
 from services.openai_service import call_openai, transcribe_voice
@@ -344,7 +352,9 @@ async def _vision_model_for_message(message: Message) -> str:
 # /plog 与 /magnet 待处理照片缓存目录：跟 temp_*.jpg（视觉用，处理完就删）分开放，
 # 避免 finally 里的 safe_remove 把缓存也清掉。
 import os as _os
-_PLOG_CACHE_DIR = _os.environ.get("PLOG_CACHE_DIR", "plog_cache")
+# 默认放到受控的 tmp/plog_cache 下（与视觉用 temp_*.jpg 同一可写根目录），
+# 避免在没有写权限的项目根目录创建缓存目录；PLOG_CACHE_DIR 仍可显式覆盖。
+_PLOG_CACHE_DIR = _os.environ.get("PLOG_CACHE_DIR", "") or media_tmp_dir("plog_cache")
 
 
 # 图+文字生图/改图的 caption 触发词。带 / 与不带 / 两种都接：
@@ -437,7 +447,7 @@ async def _handle_photo(message: Message, bot: Bot):
         return
 
     mode = get_chat_mode(message)
-    file_path = f"temp_{message.from_user.id}_{message.message_id}.jpg"
+    file_path = media_tmp_path(f"temp_{message.from_user.id}_{message.message_id}.jpg")
     is_xp = await is_xiaopang(message)
     scope = await xiaopang_scope(message) if is_xp else "default"
 
@@ -658,8 +668,8 @@ async def _handle_voice(message: Message, bot: Bot):
         return
 
     mode = get_chat_mode(message)
-    oga_path = f"temp_voice_{message.from_user.id}_{message.message_id}.oga"
-    mp3_path = f"temp_voice_{message.from_user.id}_{message.message_id}.mp3"
+    oga_path = media_tmp_path(f"temp_voice_{message.from_user.id}_{message.message_id}.oga")
+    mp3_path = media_tmp_path(f"temp_voice_{message.from_user.id}_{message.message_id}.mp3")
     is_xp = await is_xiaopang(message)
     scope = await xiaopang_scope(message) if is_xp else "default"
 
@@ -773,8 +783,8 @@ async def video_handler(message: Message, bot: Bot):
         await bot.send_message(message.chat.id, "视频太大啦～官方 Bot API 目前最多只能处理 20MB 以内的视频。")
         return
 
-    video_path = f"temp_video_{message.from_user.id}_{message.message_id}.mp4"
-    frames_dir = f"frames_{message.from_user.id}_{message.message_id}"
+    video_path = media_tmp_path(f"temp_video_{message.from_user.id}_{message.message_id}.mp4")
+    frames_dir = media_tmp_dir(f"frames_{message.from_user.id}_{message.message_id}")
     is_xp = await is_xiaopang(message)
     scope = await xiaopang_scope(message) if is_xp else "default"
 

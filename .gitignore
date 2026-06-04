@@ -20,9 +20,11 @@ __pycache__/
 venv/
 env/
 
+tmp/
 temp_*
 photo_*.jpg
 frames_*/
+plog_cache/
 *.tmp
 
 .DS_Store
