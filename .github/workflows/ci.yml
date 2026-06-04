@@ -44,8 +44,9 @@ jobs:
         run: pip-audit -r requirements.txt --ignore-vuln CVE-2026-34993 --ignore-vuln CVE-2026-47265
 
       - name: Smoke tests
+        timeout-minutes: 10
         run: |
           for test_file in scripts/smoke_test*.py; do
             echo "Running ${test_file}"
-            python "${test_file}"
+            timeout 90s python "${test_file}"
           done
