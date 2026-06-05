@@ -1,0 +1,32 @@
+# Development and code quality tools
+
+# Core requirements
+-r requirements.txt
+
+# Code formatting & linting
+black==24.1.1
+isort==5.13.2
+ruff==0.2.1
+pylint==3.0.3
+flake8==7.0.0
+
+# Type checking
+mypy==1.8.0
+types-aiofiles>=24.1.0.20240106
+types-python-dotenv>=1.0.1
+
+# Testing
+pytest==7.4.4
+pytest-cov==4.1.0
+pytest-asyncio==0.23.2
+pytest-mock==3.12.0
+
+# Security scanning
+bandit==1.7.5
+pip-audit==2.6.1
+
+# Pre-commit hooks
+pre-commit==3.6.0
+
+# Code quality metrics
+coverage==7.4.1
