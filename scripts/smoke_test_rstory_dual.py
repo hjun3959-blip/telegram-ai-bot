@@ -112,8 +112,8 @@ async def main() -> None:
     # ---------- 6) 线A：推进到 payment_gate → Mock 解锁 → payment 跃迁 ----------
     mock = payment.MockUSDTProvider()
     payment.set_provider(mock)
-    # a_lina_walk --hold_hands--> a_lina_gate_r(payment_gate, L1, 未解锁) → NEEDS_UNLOCK
-    ra_gate = await fsm.try_choice(uid, LINE_A, "hold_hands")
+    # a_lina_walk --team_up--> a_lina_gate_r(payment_gate, L1, 未解锁) → NEEDS_UNLOCK
+    ra_gate = await fsm.try_choice(uid, LINE_A, "team_up")
     assert ra_gate.status == fsm.STATUS_NEEDS_UNLOCK, ra_gate
     assert ra_gate.unlock_id == "r_rated_lina" and ra_gate.content_level == 1, ra_gate
     # 创建订单（携带 script_id=线A）→ Mock 标记已付 → 确认 → 跃迁到 a_lina_intimate
