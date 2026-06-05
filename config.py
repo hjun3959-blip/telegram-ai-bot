@@ -389,7 +389,8 @@ BUSINESS_SYSTEM_PROMPT = """你是阿君的 Telegram Business 聊天代理，名
 
 # ===== 每天一个笑话（daily joke）：内部定时任务 =====
 #
-# - DAILY_JOKE_ENABLED：总开关（"1"/"true"/"yes"/"on" 视为启用）
+# - DAILY_JOKE_ENABLED：总开关（"1"/"true"/"yes"/"on" 视为启用）。默认关闭，
+#   需显式设置才会启用，避免生产环境意外群发。
 # - DAILY_JOKE_HOUR / DAILY_JOKE_MINUTE：本地（DAILY_JOKE_TZ）的触发时刻
 # - DAILY_JOKE_TZ：时区名（IANA 名称，默认 Asia/Hong_Kong）
 # - DAILY_JOKE_SOURCE_MODE：mixed | network | ai。mixed 优先抓取，失败回落 AI；
@@ -400,7 +401,7 @@ BUSINESS_SYSTEM_PROMPT = """你是阿君的 Telegram Business 聊天代理，名
 #   owner → OWNER_CHAT_IDS；beibei → meta.xiaopang_chat_id (+ DAILY_JOKE_BEIBEI_CHAT_IDS)
 # - DAILY_JOKE_BEIBEI_CHAT_IDS：可选 env 补丁，当 meta 里没记到贝贝 chat_id 时使用
 # - 全部都有合理默认，无密钥写死
-_DAILY_JOKE_ENABLED_RAW = _env_str("DAILY_JOKE_ENABLED", "1").lower()
+_DAILY_JOKE_ENABLED_RAW = _env_str("DAILY_JOKE_ENABLED", "0").lower()
 DAILY_JOKE_ENABLED = _DAILY_JOKE_ENABLED_RAW in {"1", "true", "yes", "on"}
 DAILY_JOKE_HOUR = _env_int("DAILY_JOKE_HOUR", 21, min_value=0)
 DAILY_JOKE_MINUTE = _env_int("DAILY_JOKE_MINUTE", 0, min_value=0)
