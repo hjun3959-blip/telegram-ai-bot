@@ -4,29 +4,29 @@
 -r requirements.txt
 
 # Code formatting & linting
-black==26.3.1
-isort==5.13.2
-ruff==0.2.1
-pylint==3.0.3
-flake8==7.0.0
+black==26.5.1
+isort==8.0.1
+ruff==0.15.16
+pylint==4.0.5
+flake8==7.3.0
 
 # Type checking
-mypy==1.8.0
-types-aiofiles>=24.1.0.20240106
+mypy==2.1.0
+types-aiofiles>=25.1.0.20260518
 
 # Testing
 pytest==9.0.3
-pytest-cov==4.1.0
-pytest-asyncio==0.23.2
-pytest-mock==3.12.0
+pytest-cov==7.1.0
+pytest-asyncio==1.4.0
+pytest-mock==3.15.1
 
 # Security scanning
-bandit==1.7.5
-pbr>=5.0  # required at runtime by bandit (via pbr.version) but not pulled in transitively
-pip-audit==2.6.1
+bandit==1.9.4
+pbr>=7.0.3  # required at runtime by bandit (via pbr.version) but not pulled in transitively
+pip-audit==2.10.0
 
 # Pre-commit hooks
-pre-commit==3.6.0
+pre-commit==4.6.0
 
 # Code quality metrics
-coverage==7.4.1
+coverage==7.14.1
