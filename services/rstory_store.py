@@ -81,10 +81,23 @@ async def _ensure_conn() -> aiosqlite.Connection:
         await conn.execute("PRAGMA foreign_keys=ON;")
         seed_sql = _SEED_SQL_PATH.read_text(encoding="utf-8")
         await conn.executescript(seed_sql)
+        await _migrate_schema(conn)
         await conn.commit()
         _db = conn
         logger.info("rstory store opened | path=%s", RSTORY_DB_PATH)
         return _db
+
+
+async def _migrate_schema(conn: aiosqlite.Connection) -> None:
+    """幂等小迁移：为已存在的库补齐新增列（SQLite 无 ADD COLUMN IF NOT EXISTS）。
+
+    rstory_charges.script_id：支付订单记录触发支付时所处的剧本，使解锁结算能按
+    正确的 script_id 消费 payment 跃迁（多剧情线并行进度的隔离前提）。
+    """
+    async with conn.execute("PRAGMA table_info(rstory_charges)") as cur:
+        cols = {row[1] for row in await cur.fetchall()}
+    if "script_id" not in cols:
+        await conn.execute("ALTER TABLE rstory_charges ADD COLUMN script_id TEXT")
 
 
 async def init_store() -> None:
@@ -223,6 +236,7 @@ class Charge:
     payment_url: str | None
     created_at: str
     confirmed_at: str | None
+    script_id: str | None = None
 
 
 # ---------------- scripts / characters / scenes（静态内容读）----------------
@@ -277,6 +291,82 @@ async def get_scene(scene_id: str) -> Scene | None:
         "SELECT scene_id, script_id, state_type, scene_type, title, fixed_text, "
         "choices_json, content_level, char_id FROM scenes WHERE scene_id = ?",
         (scene_id,),
+    )
+    if not row:
+        return None
+    return Scene(
+        scene_id=row["scene_id"],
+        script_id=row["script_id"],
+        state_type=row["state_type"],
+        scene_type=row["scene_type"],
+        title=row["title"],
+        fixed_text=row["fixed_text"],
+        choices=_parse_json(row["choices_json"], []),
+        content_level=row["content_level"],
+        char_id=row["char_id"],
+    )
+
+
+async def list_script_characters(script_id: str) -> list[Character]:
+    """列出某剧本可选的角色（join script_characters），按 role_name/char_id 稳定排序。
+
+    先选角色入口（Step 1）用：聚合两条线的角色给用户挑选。
+    """
+    rows = await _fetchall(
+        "SELECT c.char_id, c.name, c.base_prompt, c.r_prompt, c.nsfw_prompt, "
+        "c.devoted_prompt, c.content_level FROM script_characters sc "
+        "JOIN characters c ON sc.char_id = c.char_id "
+        "WHERE sc.script_id = ? ORDER BY sc.role_name, c.char_id",
+        (script_id,),
+    )
+    return [
+        Character(
+            char_id=r["char_id"],
+            name=r["name"],
+            base_prompt=r["base_prompt"],
+            r_prompt=r["r_prompt"],
+            nsfw_prompt=r["nsfw_prompt"],
+            devoted_prompt=r["devoted_prompt"],
+            content_level=r["content_level"],
+        )
+        for r in rows
+    ]
+
+
+async def list_scripts(active_only: bool = True) -> list[Script]:
+    """列出剧本（剧情线）。先选角色→选线入口用。"""
+    query = (
+        "SELECT script_id, title, description, entry_state, is_active FROM scripts"
+    )
+    if active_only:
+        query += " WHERE is_active = 1"
+    query += " ORDER BY script_id"
+    rows = await _fetchall(query)
+    return [
+        Script(
+            script_id=r["script_id"],
+            title=r["title"],
+            description=r["description"],
+            entry_state=r["entry_state"],
+            is_active=r["is_active"],
+        )
+        for r in rows
+    ]
+
+
+async def get_char_entry_scene(script_id: str, char_id: str) -> Scene | None:
+    """取某剧本里某角色的入口场景。
+
+    约定：每个角色在每条线有一个 normal 入口场景，scene_id 以 `_intro` 结尾
+    （命名约定 a_<char>_intro / b_<char>_intro）。选 (角色,线) 后从这里开始。
+    """
+    row = await _fetchone(
+        "SELECT scene_id, script_id, state_type, scene_type, title, fixed_text, "
+        "choices_json, content_level, char_id FROM scenes "
+        "WHERE script_id = ? AND char_id = ? AND state_type = 'normal' "
+        "AND scene_id LIKE '%\\_intro' ESCAPE '\\' "
+        "ORDER BY scene_id LIMIT 1",
+        (script_id, char_id),
     )
     if not row:
         return None
@@ -603,7 +693,7 @@ async def list_unlocked(user_id: int | str) -> list[str]:
 
 _CHARGE_COLS = (
     "charge_id, user_id, unlock_id, usdt_amount, provider, status, "
-    "pay_address, pay_info, track_id, payment_url, created_at, confirmed_at"
+    "pay_address, pay_info, track_id, payment_url, created_at, confirmed_at, script_id"
 )
 
 
@@ -621,6 +711,7 @@ def _row_to_charge(row: aiosqlite.Row) -> Charge:
         payment_url=row["payment_url"],
         created_at=row["created_at"],
         confirmed_at=row["confirmed_at"],
+        script_id=row["script_id"],
     )
 
 
@@ -635,13 +726,14 @@ async def create_charge_record(
     pay_info: str | None = None,
     track_id: str | None = None,
     payment_url: str | None = None,
+    script_id: str | None = None,
 ) -> Charge:
     now = _now_iso()
     await _execute(
         "INSERT INTO rstory_charges "
         "(charge_id, user_id, unlock_id, usdt_amount, provider, status, "
-        "pay_address, pay_info, track_id, payment_url, created_at, confirmed_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+        "pay_address, pay_info, track_id, payment_url, created_at, confirmed_at, script_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)",
         (
             charge_id,
             str(_norm_uid(user_id)),
@@ -654,6 +746,7 @@ async def create_charge_record(
             track_id,
             payment_url,
             now,
+            script_id,
         ),
     )
     return Charge(
@@ -669,6 +762,7 @@ async def create_charge_record(
         payment_url=payment_url,
         created_at=now,
         confirmed_at=None,
+        script_id=script_id,
     )
 
 

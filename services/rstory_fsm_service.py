@@ -215,6 +215,43 @@ async def start_story(
     return await _state_view(user_id, script_id, gs)
 
 
+async def enter_story(
+    user_id: int | str,
+    script_id: str,
+    char_id: str,
+    *,
+    username: str | None = None,
+) -> StateView:
+    """进入某 (角色, 剧情线)。先选角色入口（Step 3）用。
+
+    - 无该剧本进度：在该角色的入口场景初始化 user_game_state(current_char_id=char_id)。
+    - 已有该剧本进度：直接恢复（不回退、不改 current_char_id），让用户接着上次继续。
+
+    双线隔离：user_game_state 以 (user_id, script_id) 为主键，两条线各自一行，互不覆盖。
+    """
+    script = await _require_script(script_id)
+    await store.ensure_user(user_id, username)
+
+    gs = await store.get_game_state(user_id, script_id)
+    if gs is None:
+        entry_scene = await store.get_char_entry_scene(script_id, char_id)
+        if entry_scene is None:
+            # 该角色在此线暂无入口场景：回落剧本默认入口。
+            entry_scene = await _require_scene(script.entry_state)
+        gs = store.GameState(
+            user_id=int(user_id),
+            script_id=script_id,
+            current_fsm_state=entry_scene.scene_id,
+            current_char_id=char_id,
+            history=[entry_scene.scene_id],
+        )
+        await store.set_game_state(
+            user_id, script_id, gs.current_fsm_state, gs.current_char_id, gs.history
+        )
+    gs = await _auto_advance(user_id, script_id, gs)
+    return await _state_view(user_id, script_id, gs)
+
+
 async def get_state(user_id: int | str, script_id: str | None = None) -> StateView | None:
     script_id = script_id or DEFAULT_SCRIPT_ID
     gs = await store.get_game_state(user_id, script_id)

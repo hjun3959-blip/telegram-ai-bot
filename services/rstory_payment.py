@@ -280,14 +280,22 @@ class UnlockChargeResult:
 
 
 async def create_unlock_charge(
-    user_id: int | str, unlock_id: str, *, provider: PaymentProvider | None = None
+    user_id: int | str,
+    unlock_id: str,
+    *,
+    provider: PaymentProvider | None = None,
+    script_id: str | None = None,
 ) -> UnlockChargeResult:
     """为"解锁某产品"创建订单。
 
     幂等保护：若已解锁，直接返回 already_unlocked=True，不创建订单、不收费。
     否则按 unlock_products USDT 价创建订单，并写一条 pending 支付记录。
+
+    script_id：触发支付时玩家所处的剧本。落到订单上，使解锁结算能按正确剧本消费
+    payment 跃迁（多剧情线并行进度的隔离前提）。缺省回落 DEFAULT_SCRIPT_ID。
     """
     provider = provider or get_provider()
+    script_id = script_id or fsm.DEFAULT_SCRIPT_ID
     if await store.is_unlocked(user_id, unlock_id):
         return UnlockChargeResult(already_unlocked=True, unlock_id=unlock_id)
 
@@ -305,6 +313,7 @@ async def create_unlock_charge(
         pay_info=info.pay_info,
         track_id=info.track_id,
         payment_url=info.payment_url,
+        script_id=script_id,
     )
     logger.info(
         "rstory charge created | uid=%s | unlock=%s | amount=%s | charge=%s",
@@ -333,8 +342,10 @@ async def _settle_common(charge: store.Charge) -> ConfirmResult:
     unlocked_now = await store.record_unlock(
         charge.user_id, charge.unlock_id, source=store.UNLOCK_SOURCE_OXAPAY, charge_id=charge.charge_id
     )
+    # 按订单记录的剧本消费 payment 跃迁，使双线进度互不串线；旧订单无 script_id 时回落默认剧本。
+    settle_script = charge.script_id or fsm.DEFAULT_SCRIPT_ID
     advance = await fsm.consume_payment(
-        charge.user_id, fsm.DEFAULT_SCRIPT_ID, f"{charge.unlock_id}_paid"
+        charge.user_id, settle_script, f"{charge.unlock_id}_paid"
     )
     logger.info(
         "rstory unlock settled | uid=%s | unlock=%s | new=%s | charge=%s | advance=%s",
