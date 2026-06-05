@@ -1,24 +1,23 @@
-"""R 级互动剧情 —— 可插拔 USDT 支付层。
+"""R 级互动剧情 —— 可插拔 USDT 支付层（融合数据驱动解锁模型）。
 
-用户明确决定：直接收 USDT，不走 Telegram Stars / XTR / send_invoice / pre_checkout_query。
-解锁模型："每深入一个阶段付费一次"，金额来自 config.RSTORY_STAGE_PRICES_USDT（集中可配）。
+用户最终决定：直接收 USDT，不走 Telegram Stars。解锁单位从旧的"角色+阶段"切换到
+数据驱动的 **unlock_products（unlock_id）**；USDT 金额取自 unlock_products.usdt_amount
+（集中在 DB 种子里配置，可被 config 覆盖）。
 
-本模块定义可插拔抽象，便于后续替换为真实链上渠道（TRC20 等）而不动 FSM / store / 路由：
+支付通道层不变（沿用已落地的 OxaPay 真实渠道 + Webhook 验签），只把"解锁成功"的写入
+目标切到 user_unlocks，并让 fsm_transitions 的 payment 跃迁消费解锁状态。
 
     PaymentProvider（抽象基类）
-      ├─ create_charge(user_id, character, stage, usdt_amount) -> ChargeInfo
-      └─ confirm_charge(charge_id) -> bool          # 查询/确认订单是否已支付
+      ├─ create_charge(user_id, unlock_id, usdt_amount) -> ChargeInfo
+      └─ confirm_charge(charge_id) -> bool
 
-    MockUSDTProvider（默认实现）
-      - create_charge：返回模拟 charge（占位地址/备注）。
-      - mark_paid(charge_id)：测试/演示用，手动把订单标记为"已支付"。
-      - confirm_charge：若被 mark_paid 过则返回 True。
+    MockUSDTProvider（默认，可 mark_paid 模拟到账）
+    OxaPayProvider（真实渠道：POST /payment/invoice，落 track_id/payment_url；到账走 Webhook）
 
-编排函数（与具体 provider 解耦，FSM/store 在这里被串起来）：
-- create_unlock_charge：已解锁则不重复收费；否则按阶段定价创建订单 + 写 pending 记录。
-- confirm_unlock：确认支付 → 写解锁记录（幂等）→ 推进 FSM 到该阶段入口。
-
-provider 选择由 config.RSTORY_PAYMENT_PROVIDER 决定，get_provider() 返回单例。
+编排：
+- create_unlock_charge：已解锁则不重复收费；否则按 unlock_products USDT 价创建订单 + 写 pending。
+- settle_paid_charge：Webhook 验签确认到账后，写 user_unlocks（幂等）+ 消费 FSM payment 跃迁。
+- confirm_unlock：主动确认订单（Mock / inquiry）后同样写解锁 + 推进。
 """
 
 from __future__ import annotations
@@ -39,7 +38,7 @@ from config import (
     OXAPAY_RETURN_URL,
     OXAPAY_SANDBOX,
     RSTORY_PAYMENT_PROVIDER,
-    RSTORY_STAGE_PRICES_USDT,
+    RSTORY_USDT_PRICE_OVERRIDES,
     RSTORY_USDT_RECEIVE_ADDRESS,
 )
 from services import rstory_fsm_service as fsm
@@ -51,51 +50,55 @@ logger = setup_logging()
 
 @dataclass
 class ChargeInfo:
-    """创建订单后返回给上层的支付信息（占位字段，真实渠道会填真实地址/二维码/链接）。"""
+    """创建订单后返回给上层的支付信息。"""
 
     charge_id: str
     usdt_amount: float
     pay_address: str
-    pay_info: str  # 备注/说明/二维码链接占位
-    # 真实渠道（OxaPay）额外字段：支付页链接 + 渠道侧会话 ID。Mock 留空。
+    pay_info: str
     payment_url: str | None = None
     track_id: str | None = None
 
 
-def stage_price_usdt(stage: int) -> float:
-    """查阶段定价（USDT）。未知阶段抛 ValueError，避免静默 0 元解锁。"""
-    if stage not in RSTORY_STAGE_PRICES_USDT:
-        raise ValueError(f"no price configured for stage {stage}")
-    return RSTORY_STAGE_PRICES_USDT[stage]
+async def unlock_price_usdt(unlock_id: str) -> float:
+    """查解锁产品 USDT 定价。config 覆盖优先，否则取 unlock_products.usdt_amount。
+
+    未知产品抛 ValueError，避免静默 0 元解锁。
+    """
+    if unlock_id in RSTORY_USDT_PRICE_OVERRIDES:
+        return RSTORY_USDT_PRICE_OVERRIDES[unlock_id]
+    product = await store.get_unlock_product(unlock_id)
+    if product is None:
+        raise ValueError(f"unknown unlock product: {unlock_id}")
+    return product.usdt_amount
 
 
 class PaymentProvider(ABC):
-    """支付渠道抽象基类。真实渠道（TRC20 等）实现这两个方法即可接入。"""
+    """支付渠道抽象基类。真实渠道实现这两个方法即可接入。"""
 
     name: str = "abstract"
 
     @abstractmethod
     async def create_charge(
-        self, *, user_id: int | str, character: str, stage: int, usdt_amount: float
+        self, *, user_id: int | str, unlock_id: str, usdt_amount: float
     ) -> ChargeInfo:
-        """创建一笔收款订单，返回 charge_id 与支付信息。不写存储（由编排层写）。"""
+        """创建一笔收款订单。不写存储（由编排层写）。"""
 
     @abstractmethod
     async def confirm_charge(self, charge_id: str) -> bool:
-        """查询/确认订单是否已收到款项。已支付返回 True。"""
+        """查询/确认订单是否已收款。已支付返回 True。"""
 
 
 class MockUSDTProvider(PaymentProvider):
-    """默认 Mock 实现：可手动标记已支付，用于跑通完整解锁流程（无需真实链上）。"""
+    """默认 Mock：可手动标记已支付，跑通完整解锁流程（无需真实链上）。"""
 
     name = "mock"
 
     def __init__(self) -> None:
-        # charge_id -> 是否已被手动标记支付
         self._paid: set[str] = set()
 
     async def create_charge(
-        self, *, user_id: int | str, character: str, stage: int, usdt_amount: float
+        self, *, user_id: int | str, unlock_id: str, usdt_amount: float
     ) -> ChargeInfo:
         charge_id = f"mock_{uuid.uuid4().hex[:16]}"
         address = RSTORY_USDT_RECEIVE_ADDRESS or "TXmockUSDTaddressPLACEHOLDER"
@@ -111,7 +114,6 @@ class MockUSDTProvider(PaymentProvider):
         )
 
     def mark_paid(self, charge_id: str) -> None:
-        """测试/演示用：手动把订单标记为已支付。真实 provider 不需要这个方法。"""
         self._paid.add(charge_id)
 
     async def confirm_charge(self, charge_id: str) -> bool:
@@ -125,17 +127,17 @@ class OxaPayError(Exception):
 class OxaPayProvider(PaymentProvider):
     """真实支付渠道：OxaPay 加密货币收款（USDT，按 USD 计价）。
 
-    - create_charge：POST {API_BASE}/payment/invoice 生成发票，落库 track_id + payment_url。
+    - create_charge：POST {API_BASE}/payment/invoice 生成发票，返回 track_id + payment_url。
       认证用请求头 merchant_api_key（绝不进日志）。
     - 到账确认主路径走 Webhook（services/rstory_webhook.py），不在这里轮询。
-    - confirm_charge：以本地订单状态为准（Webhook 已把 paid 写库）；可选地未来接 inquiry 兜底。
+    - confirm_charge：以本地订单状态为准（Webhook 已把 paid 写库）。
 
     上线 checklist（用户拿到真实 key / 回调域名后）：
-      1) 设 OXAPAY_MERCHANT_API_KEY = 真实 merchant key
-      2) 设 OXAPAY_CALLBACK_BASE_URL = 公网 HTTPS 基址（OxaPay 不回调私网/localhost）
-      3) OXAPAY_SANDBOX=false（关沙盒）
+      1) OXAPAY_MERCHANT_API_KEY = 真实 merchant key
+      2) OXAPAY_CALLBACK_BASE_URL = 公网 HTTPS 基址（OxaPay 不回调私网/localhost）
+      3) OXAPAY_SANDBOX=false
       4) RSTORY_PAYMENT_PROVIDER=oxapay
-      5) 在 OxaPay 后台/创建发票参数确认 callback_url 与本服务一致
+      5) 确认 callback_url 与本服务一致
     """
 
     name = "oxapay"
@@ -169,7 +171,7 @@ class OxaPayProvider(PaymentProvider):
         return payload
 
     async def create_charge(
-        self, *, user_id: int | str, character: str, stage: int, usdt_amount: float
+        self, *, user_id: int | str, unlock_id: str, usdt_amount: float
     ) -> ChargeInfo:
         if not self._merchant_key:
             raise OxaPayError("OXAPAY_MERCHANT_API_KEY 未配置，无法创建发票")
@@ -187,7 +189,6 @@ class OxaPayProvider(PaymentProvider):
                 async with session.post(url, json=payload, headers=headers) as resp:
                     text = await resp.text()
                     if resp.status >= 400:
-                        # 不记录 headers（含 key）；只记录状态码与截断 body。
                         logger.warning(
                             "oxapay invoice http error | status=%s | charge=%s | body=%.300s",
                             resp.status, charge_id, text,
@@ -195,7 +196,7 @@ class OxaPayProvider(PaymentProvider):
                         raise OxaPayError(f"OxaPay invoice HTTP {resp.status}")
                     try:
                         body = await resp.json(content_type=None)
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         raise OxaPayError(f"OxaPay invoice 非 JSON 响应: {e}") from e
         except aiohttp.ClientError as e:
             logger.warning("oxapay invoice request failed | charge=%s | err=%s", charge_id, e)
@@ -203,7 +204,6 @@ class OxaPayProvider(PaymentProvider):
 
         data = body.get("data") if isinstance(body, dict) else None
         if not isinstance(data, dict):
-            # 某些版本可能把字段平铺在顶层；兼容回退。
             data = body if isinstance(body, dict) else {}
         track_id = data.get("track_id")
         payment_url = data.get("payment_url")
@@ -230,7 +230,6 @@ class OxaPayProvider(PaymentProvider):
         )
 
     async def confirm_charge(self, charge_id: str) -> bool:
-        """到账以 Webhook 写库为准；这里读本地订单状态判断是否已 paid/confirmed。"""
         charge = await store.get_charge(charge_id)
         if charge is None:
             return False
@@ -248,7 +247,7 @@ _provider_singleton: PaymentProvider | None = None
 
 
 def get_provider() -> PaymentProvider:
-    """返回当前配置的 provider 单例。未知配置回落到 Mock 并告警。"""
+    """返回当前配置的 provider 单例。未知配置回落 Mock 并告警。"""
     global _provider_singleton
     if _provider_singleton is not None:
         return _provider_singleton
@@ -277,30 +276,29 @@ class UnlockChargeResult:
 
     already_unlocked: bool
     charge: ChargeInfo | None = None
-    stage: int | None = None
+    unlock_id: str | None = None
 
 
 async def create_unlock_charge(
-    user_id: int | str, character: str, stage: int, *, provider: PaymentProvider | None = None
+    user_id: int | str, unlock_id: str, *, provider: PaymentProvider | None = None
 ) -> UnlockChargeResult:
-    """为"解锁某阶段"创建订单。
+    """为"解锁某产品"创建订单。
 
-    幂等保护：若该阶段已解锁，直接返回 already_unlocked=True，不创建订单、不收费。
-    否则按集中定价创建订单，并写一条 pending 支付记录到独立存储。
+    幂等保护：若已解锁，直接返回 already_unlocked=True，不创建订单、不收费。
+    否则按 unlock_products USDT 价创建订单，并写一条 pending 支付记录。
     """
     provider = provider or get_provider()
-    if await store.is_stage_unlocked(user_id, character, stage):
-        return UnlockChargeResult(already_unlocked=True, stage=stage)
+    if await store.is_unlocked(user_id, unlock_id):
+        return UnlockChargeResult(already_unlocked=True, unlock_id=unlock_id)
 
-    amount = stage_price_usdt(stage)
+    amount = await unlock_price_usdt(unlock_id)
     info = await provider.create_charge(
-        user_id=user_id, character=character, stage=stage, usdt_amount=amount
+        user_id=user_id, unlock_id=unlock_id, usdt_amount=amount
     )
     await store.create_charge_record(
         charge_id=info.charge_id,
         user_id=user_id,
-        character=character,
-        stage=stage,
+        unlock_id=unlock_id,
         usdt_amount=amount,
         provider=provider.name,
         pay_address=info.pay_address,
@@ -309,30 +307,52 @@ async def create_unlock_charge(
         payment_url=info.payment_url,
     )
     logger.info(
-        "rstory charge created | uid=%s | char=%s | stage=%s | amount=%s | charge=%s",
-        user_id, character, stage, amount, info.charge_id,
+        "rstory charge created | uid=%s | unlock=%s | amount=%s | charge=%s",
+        user_id, unlock_id, amount, info.charge_id,
     )
-    return UnlockChargeResult(already_unlocked=False, charge=info, stage=stage)
+    return UnlockChargeResult(already_unlocked=False, charge=info, unlock_id=unlock_id)
 
 
 @dataclass
 class ConfirmResult:
     """确认解锁的结果。"""
 
-    ok: bool  # 支付是否已确认
-    unlocked_now: bool = False  # 本次是否新增了解锁记录（幂等：已解锁则 False）
-    stage: int | None = None
-    state: fsm.StateView | None = None  # 解锁成功后 FSM 推进到的新状态
+    ok: bool
+    unlocked_now: bool = False
+    unlock_id: str | None = None
+    advance: fsm.AdvanceResult | None = None  # 解锁后消费 payment 跃迁的结果
     message: str = ""
+
+
+async def _settle_common(charge: store.Charge) -> ConfirmResult:
+    """到账后的统一结算：写 user_unlocks（幂等）+ 消费 FSM payment 跃迁。
+
+    payment 转移的 trigger_value 约定为 "<unlock_id>_paid"（见 seed）。结算时用户在某
+    剧本的当前状态应是对应 payment_gate；consume_payment 会校验 condition 并跃迁。
+    """
+    unlocked_now = await store.record_unlock(
+        charge.user_id, charge.unlock_id, source=store.UNLOCK_SOURCE_OXAPAY, charge_id=charge.charge_id
+    )
+    advance = await fsm.consume_payment(
+        charge.user_id, fsm.DEFAULT_SCRIPT_ID, f"{charge.unlock_id}_paid"
+    )
+    logger.info(
+        "rstory unlock settled | uid=%s | unlock=%s | new=%s | charge=%s | advance=%s",
+        charge.user_id, charge.unlock_id, unlocked_now, charge.charge_id, advance.status,
+    )
+    return ConfirmResult(
+        ok=True,
+        unlocked_now=unlocked_now,
+        unlock_id=charge.unlock_id,
+        advance=advance,
+        message="解锁成功。" if unlocked_now else "该产品此前已解锁。",
+    )
 
 
 async def confirm_unlock(
     charge_id: str, *, provider: PaymentProvider | None = None
 ) -> ConfirmResult:
-    """确认某订单是否已支付；已支付则写解锁记录（幂等）并推进 FSM 到该阶段入口。
-
-    完整链路：确认支付 → 写解锁记录 → 推进 FSM。任一前置不满足都安全短路。
-    """
+    """主动确认某订单是否已支付；已支付则写解锁记录（幂等）并消费 FSM payment 跃迁。"""
     provider = provider or get_provider()
     charge = await store.get_charge(charge_id)
     if charge is None:
@@ -340,53 +360,17 @@ async def confirm_unlock(
 
     paid = await provider.confirm_charge(charge_id)
     if not paid:
-        return ConfirmResult(ok=False, stage=charge.stage, message="尚未收到付款。")
+        return ConfirmResult(ok=False, unlock_id=charge.unlock_id, message="尚未收到付款。")
 
-    # 标记订单已确认（幂等：重复确认只是覆盖同状态）
     await store.update_charge_status(charge_id, store.CHARGE_CONFIRMED)
-
-    # 写解锁记录（幂等：已解锁返回 False，不重复收费/不重复解锁）
-    unlocked_now = await store.record_unlock(
-        charge.user_id, charge.character, charge.stage, charge_id
-    )
-
-    # 推进 FSM 到该阶段入口
-    state = await fsm.enter_stage(charge.user_id, charge.character, charge.stage)
-    logger.info(
-        "rstory unlock confirmed | uid=%s | char=%s | stage=%s | new=%s | charge=%s",
-        charge.user_id, charge.character, charge.stage, unlocked_now, charge_id,
-    )
-    return ConfirmResult(
-        ok=True,
-        unlocked_now=unlocked_now,
-        stage=charge.stage,
-        state=state,
-        message="解锁成功。" if unlocked_now else "该阶段此前已解锁。",
-    )
+    return await _settle_common(charge)
 
 
 async def settle_paid_charge(charge: store.Charge) -> ConfirmResult:
-    """Webhook 已验签确认到账后，结算一笔订单：置 paid → 写解锁 → 推进 FSM。
+    """Webhook 已验签确认到账后，结算一笔订单：置 paid → 写解锁 → 消费 FSM payment 跃迁。
 
-    与 confirm_unlock 的区别：到账事实由 Webhook（HMAC 验签）给出，这里不再调
-    provider.confirm_charge。全程复用 store 的幂等机制：
-    - update_charge_status(paid)：confirmed_at 用 COALESCE 不覆盖，重复回调不刷新时间。
-    - record_unlock：已解锁返回 False，重复回调不重复解锁、不重复加记录。
-    调用方（webhook）应保证 charge 非 None 且金额/币种已校验。
+    到账事实由 Webhook（HMAC 验签）给出，这里不再调 provider.confirm_charge。全程复用
+    store 幂等机制：update_charge_status（COALESCE 不覆盖时间）、record_unlock（已解锁返回 False）。
     """
     await store.update_charge_status(charge.charge_id, store.CHARGE_PAID)
-    unlocked_now = await store.record_unlock(
-        charge.user_id, charge.character, charge.stage, charge.charge_id
-    )
-    state = await fsm.enter_stage(charge.user_id, charge.character, charge.stage)
-    logger.info(
-        "rstory unlock via webhook | uid=%s | char=%s | stage=%s | new=%s | charge=%s",
-        charge.user_id, charge.character, charge.stage, unlocked_now, charge.charge_id,
-    )
-    return ConfirmResult(
-        ok=True,
-        unlocked_now=unlocked_now,
-        stage=charge.stage,
-        state=state,
-        message="解锁成功。" if unlocked_now else "该阶段此前已解锁。",
-    )
+    return await _settle_common(charge)

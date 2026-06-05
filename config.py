@@ -421,35 +421,46 @@ DAILY_JOKE_RECIPIENTS = {
 }
 DAILY_JOKE_BEIBEI_CHAT_IDS = _env_list("DAILY_JOKE_BEIBEI_CHAT_IDS", [])
 
-# ===================== R 级互动剧情系统（FSM 引擎骨架）=====================
+# ===================== R 级互动剧情系统（数据驱动 FSM）=====================
 #
-# 剧情系统的可配置项集中放这里，与现有 config 风格一致（_env_* 读取，含默认值）。
-# 设计原则：
-# - 解锁直接收 USDT，不走 Telegram Stars / XTR / send_invoice（用户明确决定）。
-# - 三个阶段“每深入一个阶段付费一次”，金额是集中可配置常量，便于后续调价。
-# - 支付渠道用可插拔抽象（services/rstory_payment.py），默认 Mock，后续换真实链上渠道
-#   只需改 RSTORY_PAYMENT_PROVIDER 与新增 Provider 实现，无需动 FSM / store / 路由。
+# 重构（用户最终决定）：从硬编码 FSM 迁移到**数据驱动 FSM**。剧本/角色/场景/转移规则
+# 全部存在 DB（db/rstory_seed.sql 建表 + 种子，启动时 executescript 跑，幂等）。
+# 引擎从 DB 读 fsm_transitions 推进；解锁产品/记录用 unlock_products / user_unlocks。
 #
-# 阶段定价（USDT）：阶段1纯文字 2、阶段2图文 3、阶段3视频 5。
-RSTORY_STAGE1_USDT = _env_float("RSTORY_STAGE1_USDT", 2.0, min_value=0.0)
-RSTORY_STAGE2_USDT = _env_float("RSTORY_STAGE2_USDT", 3.0, min_value=0.0)
-RSTORY_STAGE3_USDT = _env_float("RSTORY_STAGE3_USDT", 5.0, min_value=0.0)
-
-# 阶段号 -> USDT 金额。集中查表，FSM / payment / 路由都从这里读，避免散落硬编码。
-RSTORY_STAGE_PRICES_USDT: dict[int, float] = {
-    1: RSTORY_STAGE1_USDT,
-    2: RSTORY_STAGE2_USDT,
-    3: RSTORY_STAGE3_USDT,
+# 设计原则（与现有 config 风格一致：_env_* 读取，含默认值）：
+# - 统一 USDT 计价，不走 Telegram Stars / XTR / send_invoice。
+# - 解锁单位是 unlock_products（unlock_id）；USDT 价的权威来源是 unlock_products.usdt_amount
+#   （在 seed 里配置：r_rated=2 / nsfw_char_luna=3 / devoted_char_luna=5）。
+#   下面的 OVERRIDES 允许用环境变量在不改 DB 的情况下临时调价（运营兜底）。
+# - 支付渠道用可插拔抽象（services/rstory_payment.py），默认 Mock，换真实渠道只需改
+#   RSTORY_PAYMENT_PROVIDER（已落地 oxapay），无需动 FSM / store / 路由。
+#
+# 解锁产品 USDT 价覆盖（可选）：默认空 -> 用 DB 里的 usdt_amount。
+# 环境变量按需设置，例如 RSTORY_USDT_R_RATED / RSTORY_USDT_NSFW_CHAR_LUNA / RSTORY_USDT_DEVOTED_CHAR_LUNA。
+_RSTORY_PRICE_OVERRIDE_KEYS = {
+    "r_rated": "RSTORY_USDT_R_RATED",
+    "nsfw_char_luna": "RSTORY_USDT_NSFW_CHAR_LUNA",
+    "devoted_char_luna": "RSTORY_USDT_DEVOTED_CHAR_LUNA",
 }
+RSTORY_USDT_PRICE_OVERRIDES: dict[str, float] = {}
+for _unlock_id, _env_key in _RSTORY_PRICE_OVERRIDE_KEYS.items():
+    _raw = _env_str(_env_key, "")
+    if _raw:
+        try:
+            RSTORY_USDT_PRICE_OVERRIDES[_unlock_id] = float(_raw)
+        except ValueError:
+            pass
 
 # 默认支付渠道标识。"mock" -> MockUSDTProvider（可手动标记已支付，跑通完整流程）。
-# 后续接入真实 TRC20 等链上渠道时，新增 provider 实现并把这里改成对应标识即可。
+# "oxapay" -> 真实 OxaPay 渠道。
 RSTORY_PAYMENT_PROVIDER = (_env_str("RSTORY_PAYMENT_PROVIDER", "mock") or "mock").lower()
 
 # 收款地址占位（真实渠道接入前仅作展示用，Mock 也会回显）。不放真实私钥/助记词。
 RSTORY_USDT_RECEIVE_ADDRESS = _env_str("RSTORY_USDT_RECEIVE_ADDRESS", "")
 
-# 剧情系统独立存储路径。默认与主库同文件（复用 SQLite 模式），但表与连接逻辑独立。
+# 剧情系统独立存储路径。沿用既有 rstory 独立库约定：默认与主库同文件（复用 SQLite 模式），
+# 但所有数据驱动表 + rstory_charges 由 rstory_store 独立连接/建表/种子管理，与主库互不影响。
+# 可通过 RSTORY_DB_PATH 指向独立文件。不引入孤立 bot.db（蓝本里的 bot.db 仅是参考脚手架）。
 RSTORY_DB_PATH = _env_str("RSTORY_DB_PATH", "") or DB_PATH
 
 
