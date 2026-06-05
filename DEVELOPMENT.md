@@ -1,414 +1,254 @@
-# 🚀 Development Guide
+# Development Guide
 
-This document provides a comprehensive guide for setting up and using the development toolchain.
+This guide covers local setup, the developer toolchain, and the checks that run
+in GitHub CI. The goal is that you can reproduce CI locally before pushing.
 
-## 📋 Quick Start
+> The bot product logic is **not** described here — this document only covers
+> developer tooling, testing, and deployment notes.
 
-### 1. Initial Setup
+---
+
+## 1. Prerequisites
+
+- **Python 3.11** (CI pins 3.11; the code targets `py311` in `pyproject.toml`).
+- `git` and `make`.
+- A POSIX shell (Linux/macOS, or WSL on Windows).
+
+---
+
+## 2. Initial setup
 
 ```bash
-# Clone repository
+# Clone
 git clone https://github.com/hjun3959-blip/telegram-ai-bot.git
 cd telegram-ai-bot
 
-# Install development tools
+# (recommended) create and activate a virtual environment
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+
+# Install runtime deps + the dev tooling used by CI and pre-commit
 make install
 
-# Setup pre-commit hooks
+# Install the git pre-commit hook
 make pre-commit-install
 ```
 
-### 2. Make Your Changes
-
-```bash
-# Make code changes
-# ...
-
-# Format and lint before committing
-make format
-make lint-fix
-```
-
-### 3. Test Your Changes
-
-```bash
-# Run tests
-make test
-
-# Check coverage
-make coverage-report
-```
+`make install` installs `requirements-dev.txt`, which pulls in `requirements.txt`
+plus the full dev toolchain (`ruff`, `bandit`, `pip-audit`, `pre-commit`, and the
+formatting/type-checking/testing tools).
 
 ---
 
-## 🛠️ Available Tools
+## 3. Environment variables
 
-### Code Formatting
+The bot is configured entirely through environment variables. Copy the example
+and fill in your own values:
 
-**Black** - Automatic code formatter
 ```bash
-make format           # Format all code
-make format-check     # Check without modifying
-make format-diff      # Show differences
+cp .env.example .env
 ```
 
-**isort** - Import organizer
-```bash
-# Included in `make format`
-python -m isort scripts/ services/ routers/ db/ utils/
-```
+`.env` is git-ignored. The most important variables (see `.env.example` for the
+full annotated list):
 
-### Code Quality
+| Variable             | Purpose                                                        |
+| -------------------- | ------------------------------------------------------------- |
+| `TELEGRAM_TOKEN`     | Telegram bot token (required to actually run the bot).         |
+| `OPENAI_API_KEY`     | API key for the OpenAI-compatible upstream (required).         |
+| `OPENAI_BASE_URL`    | Base URL of the OpenAI-compatible endpoint.                    |
+| `BOT_DB_PATH`        | Path to the SQLite database file (default `bot_data.sqlite3`). |
+| `OWNER_USERNAMES` / `OWNER_CHAT_IDS` / `OWNER_USER_IDS` | Owner identity matching. |
+| `CORE_MODEL`, `LIGHT_MODEL`, `VISION_MODEL`, ... | Model routing (don't change casually). |
 
-**Ruff** - Fast Python linter (replaces flake8 + isort + etc)
-```bash
-make lint             # Show issues
-make lint-fix         # Auto-fix issues
-```
+> **Never commit secrets.** Keep all keys and tokens in `.env` only.
 
-**Pylint** - Detailed code analysis
-```bash
-python -m pylint services/ routers/ db/ utils/ --fail-under=8.0
-```
-
-### Type Checking
-
-**MyPy** - Static type checker
-```bash
-make type-check       # Normal mode
-make type-check-strict  # Strict mode
-```
-
-### Testing
-
-**Pytest** - Test runner
-```bash
-make test             # Run all tests
-make test-verbose     # Verbose output
-make test-coverage    # With coverage
-```
-
-### Security
-
-**Bandit** - Security issue scanner
-```bash
-python -m bandit -r services/ -c pyproject.toml
-```
-
-**pip-audit** - Dependency vulnerability scanner
-```bash
-python -m pip_audit -r requirements.txt
-```
+For local checks and the smoke tests you do **not** need real credentials —
+dummy values are sufficient (the smoke tests are fully offline).
 
 ---
 
-## 🔄 Complete Quality Pipeline
+## 4. Local checks (mirror CI)
 
-Run all checks at once:
-
-```bash
-# Via Make
-make quality-check
-
-# Via Shell Script
-./scripts/quality-check.sh
-
-# Via Pre-commit
-make pre-commit-run
-```
-
----
-
-## 📊 File Structure
-
-```
-telegram-ai-bot/
-├── .github/
-│   └── workflows/
-│       └── ci.yml                    # CI/CD pipeline
-├── scripts/
-│   ├── smoke_test_copywriting.py    # Smoke tests
-│   └── quality-check.sh             # Quality check script
-├── services/                         # Business logic
-├── routers/                          # Telegram handlers
-├── db/                              # Database
-├── utils/                           # Utilities
-├── requirements.txt                 # Production dependencies
-├── requirements-dev.txt             # Development dependencies
-├── pyproject.toml                   # Tool configurations
-├── .pre-commit-config.yaml          # Pre-commit hooks
-├── Makefile                         # Development commands
-└── DEVELOPMENT.md                   # This file
-```
-
----
-
-## ⚙️ Configuration Files
-
-### `pyproject.toml`
-
-Central configuration for all tools:
-- **[tool.ruff]** - Ruff linter & formatter
-- **[tool.black]** - Black formatter
-- **[tool.isort]** - Import sorter
-- **[tool.mypy]** - Type checker
-- **[tool.pytest.ini_options]** - Test runner
-- **[tool.coverage]** - Coverage analysis
-- **[tool.bandit]** - Security scanner
-
-### `.pre-commit-config.yaml`
-
-Automatically runs checks before each commit:
-- Code formatting (Black, isort)
-- Linting (Ruff)
-- Type checking (MyPy)
-- Security scanning (Bandit)
-- General checks (trailing whitespace, etc.)
-
-### `.github/workflows/ci.yml`
-
-GitHub Actions CI/CD pipeline that runs:
-1. Code quality checks
-2. Syntax validation
-3. Unit/smoke tests
-4. Coverage reports
-
----
-
-## 🚦 Pre-commit Hooks
-
-### Installation
+Each target maps 1:1 to a step in `.github/workflows/ci.yml`.
 
 ```bash
-make pre-commit-install
+make compile   # python -m compileall -q .   (syntax check)
+make lint      # ruff check .                 (config in pyproject.toml)
+make bandit    # bandit -r . -c pyproject.toml --severity-level high
+make audit     # pip-audit -r requirements.txt
+make smoke     # run all offline smoke tests with dummy credentials
 ```
 
-### What it does
+Run the whole CI-equivalent suite at once:
 
-Every time you commit, it automatically:
-1. ✅ Formats code with Black
-2. ✅ Sorts imports with isort
-3. ✅ Checks with MyPy
-4. ✅ Lints with Ruff
-5. ✅ Scans for security issues
-6. ✅ Fixes end-of-file issues
-7. ✅ Checks YAML/JSON syntax
+```bash
+make ci
+```
 
-### Bypass (use carefully!)
+`make help` lists every available target.
+
+---
+
+## 5. Smoke tests
+
+The `scripts/smoke_test_*.py` files are self-contained, **offline** tests. They:
+
+- use a temporary SQLite file,
+- never call the network or read real secrets,
+- accept dummy `OPENAI_API_KEY` / `TELEGRAM_TOKEN` values.
+
+Run them all:
+
+```bash
+make smoke
+```
+
+Run a single one (handy while iterating):
+
+```bash
+OPENAI_API_KEY=local-dummy \
+TELEGRAM_TOKEN=local-dummy \
+python scripts/smoke_test_copywriting.py
+```
+
+CI runs every `scripts/smoke_test*.py` with a per-file timeout, so keep new
+smoke tests fast and network-free.
+
+---
+
+## 6. Pre-commit hooks
+
+Pre-commit runs fast, offline checks on every commit so problems are caught
+before they reach CI. Configured in `.pre-commit-config.yaml`:
+
+- whitespace / end-of-file / line-ending fixers,
+- `check-yaml`, `check-toml`, `check-json`,
+- large-file, merge-conflict, debug-statement, and private-key guards,
+- **ruff** (same config as CI),
+- **compileall** (Python syntax check).
+
+It intentionally does **not** run the smoke tests or any network/API checks —
+those stay in CI and in `make smoke`.
+
+```bash
+make pre-commit-install   # one-time: install the hook
+make pre-commit-run       # run all hooks against every file
+```
+
+Bypass only when you really must (e.g. WIP commit on a private branch):
 
 ```bash
 git commit --no-verify
 ```
 
-### Manual run
-
-```bash
-make pre-commit-run
-```
-
 ---
 
-## 🐛 Troubleshooting
+## 7. Linting & security config
 
-### Issue: Pre-commit fails on first run
+All tool configuration lives in `pyproject.toml`:
 
-**Solution:**
-```bash
-# Let it auto-fix issues
-git add .
-make pre-commit-run
-git commit
-```
+- **`[tool.ruff]`** — target `py311`, line length 140, excludes generated files.
+- **`[tool.ruff.lint]`** — currently a focused rule set (pyflakes/undefined-name
+  and syntax-error families). Add rules here as the codebase tightens.
+- **`[tool.bandit]`** — excluded dirs and skipped checks (`B101`).
 
-### Issue: Type checking too strict
+To silence a ruff rule for one file:
 
-**Solution - Ignore specific errors:**
-```python
-# In code
-value = unknown_type  # type: ignore[assignment]
-```
-
-### Issue: Linting issues in legacy code
-
-**Solution - Add file-specific ignores:**
-
-Update `pyproject.toml`:
 ```toml
 [tool.ruff.lint.per-file-ignores]
-"legacy_module.py" = ["E501", "F841"]
-```
-
-### Issue: Tests are slow
-
-**Solution - Run specific tests:**
-```bash
-python -m pytest scripts/smoke_test_copywriting.py -v
+"path/to/module.py" = ["E501"]
 ```
 
 ---
 
-## 📈 Metrics & Reports
+## 8. Continuous Integration (GitHub Actions)
 
-### Coverage Report
+`.github/workflows/ci.yml` runs on pushes and PRs to `master`/`main` (and via
+manual dispatch). Steps, in order:
 
-```bash
-make coverage-report
-```
+1. **Compile** — `python -m compileall -q .`
+2. **Ruff lint** — `ruff check .`
+3. **Bandit** — high-severity security scan.
+4. **pip-audit** — dependency vulnerability scan.
+5. **Smoke tests** — every `scripts/smoke_test*.py`, with per-file timeout and
+   dummy credentials.
 
-Generates HTML report at `htmlcov/index.html`
+Other workflows in `.github/workflows/`:
 
-### Code Quality Metrics
+- `secret-scan.yml` — scans for committed secrets.
+- `dependabot-automerge.yml` — auto-merges Dependabot PRs that pass checks.
 
-After running `make quality-check`, you'll get:
-- Line count by tool
-- Issues by severity
-- Type checking results
-- Security vulnerabilities
-- Dependency issues
+View runs at:
+<https://github.com/hjun3959-blip/telegram-ai-bot/actions>
 
----
-
-## 🔐 Security Best Practices
-
-### Before Committing
-
-1. Run security scan:
-   ```bash
-   python -m bandit -r services/
-   ```
-
-2. Check dependencies:
-   ```bash
-   python -m pip_audit -r requirements.txt
-   ```
-
-3. Never commit secrets:
-   - API keys
-   - Passwords
-   - Tokens
-
-Use `.env` file (ignored by git):
-```bash
-# .env
-OPENAI_API_KEY=your-key-here
-TELEGRAM_TOKEN=your-token-here
-```
+A PR is green when every required check passes. Run `make ci` locally first to
+avoid round-trips.
 
 ---
 
-## 🚀 Continuous Integration
-
-### GitHub Actions
-
-When you push or create a PR, GitHub Actions automatically:
-
-1. **Syntax Check** - Compiles all Python files
-2. **Quality Checks** - Black, isort, Ruff, MyPy
-3. **Security** - Bandit, pip-audit
-4. **Tests** - Smoke tests with coverage
-5. **Report** - Coverage uploaded to Codecov
-
-View results at: `https://github.com/hjun3959-blip/telegram-ai-bot/actions`
-
----
-
-## 📚 Additional Resources
-
-- [Black Documentation](https://black.readthedocs.io/)
-- [Ruff Documentation](https://docs.astral.sh/ruff/)
-- [MyPy Documentation](https://mypy.readthedocs.io/)
-- [Pytest Documentation](https://docs.pytest.org/)
-- [Pre-commit Documentation](https://pre-commit.com/)
-
----
-
-## ✨ Tips & Tricks
-
-### Format on Save (VS Code)
-
-Add to `.vscode/settings.json`:
-```json
-{
-  "[python]": {
-    "editor.defaultFormatter": "ms-python.black-formatter",
-    "editor.formatOnSave": true,
-    "editor.codeActionsOnSave": {
-      "source.fixAll.ruff": "explicit",
-      "source.organizeImports.ruff": "explicit"
-    }
-  }
-}
-```
-
-### Quick Quality Check Before Push
+## 9. Running the bot locally
 
 ```bash
-# One-liner
-make format && make lint-fix && make test && git push
+# After filling in a real .env (TELEGRAM_TOKEN + OPENAI_API_KEY):
+python app.py
 ```
 
-### Generate Type Stubs
+The bot uses long polling (aiogram). It creates/uses the SQLite DB at
+`BOT_DB_PATH`. Runtime artifacts (logs, the SQLite DB, `tmp/`, `plog_cache/`,
+`temp_*`, `frames_*/`, generated media) are all git-ignored.
+
+---
+
+## 10. Deployment notes
+
+Helper scripts live in `scripts/`:
+
+- `scripts/preflight_check.py` — sanity-check configuration/environment before
+  starting.
+- `scripts/deploy_to_project_phase1_1_test.sh` — example deploy script.
+- `scripts/install_logrotate.sh` — set up log rotation for the bot's logs.
+- `scripts/diagnose_chatbot_server.sh` — on-server diagnostics.
+
+General guidance:
+
+1. Provision Python 3.11 and install `requirements.txt` in a virtualenv.
+2. Provide a production `.env` (never commit it).
+3. Run `python scripts/preflight_check.py` before first start.
+4. Configure log rotation (`scripts/install_logrotate.sh`) so `logs/` doesn't
+   grow unbounded.
+5. Run `app.py` under a process manager (systemd / supervisor / pm2) so it
+   restarts on failure.
+
+---
+
+## 11. Code graph artifacts
+
+A static code graph under `docs/codegraph/` can be regenerated:
 
 ```bash
-python -m mypy services/ --emitted-type-stubs
+make codegraph        # rebuild artifacts
+make codegraph-test   # no-network self-test of the builder
 ```
 
 ---
 
-## 🎯 Code Style Guidelines
+## 12. Troubleshooting
 
-### Naming Conventions
+**Pre-commit modified files on commit.**
+Some hooks (whitespace, end-of-file) auto-fix. Re-stage and commit again:
 
-- **Functions/Variables**: `snake_case`
-- **Classes**: `PascalCase`
-- **Constants**: `UPPER_SNAKE_CASE`
-
-### Type Hints
-
-Always add type hints:
-```python
-def process_message(text: str, user_id: int) -> dict[str, Any]:
-    """Process a user message.
-    
-    Args:
-        text: The message text
-        user_id: The user ID
-        
-    Returns:
-        Processing result dictionary
-    """
-    ...
+```bash
+git add -A && git commit
 ```
 
-### Docstrings
+**Ruff flags something in legacy code.**
+Add a `per-file-ignores` entry in `pyproject.toml` (see §7) rather than
+disabling the rule globally.
 
-Use Google-style docstrings:
-```python
-def optimize_copy(text: str, signals: ExpressiveSignals | None = None) -> str:
-    """Optimize copywriting based on extracted signals.
-    
-    Args:
-        text: The text to optimize
-        signals: Optional extracted signals
-        
-    Returns:
-        Optimized text
-        
-    Raises:
-        ValueError: If text is invalid
-    """
-```
+**Smoke test is slow or hangs.**
+It should be offline and fast. Check it isn't making real network calls; CI
+enforces a per-file timeout.
 
----
-
-## 📞 Getting Help
-
-For issues or questions:
-1. Check the troubleshooting section above
-2. Review tool documentation
-3. Check CI/CD logs in GitHub Actions
-4. Ask for help in issues/discussions
-
----
-
-Last updated: 2024-06-04
+**`make` not available (Windows).**
+Use WSL, or run the underlying commands shown in each target directly.

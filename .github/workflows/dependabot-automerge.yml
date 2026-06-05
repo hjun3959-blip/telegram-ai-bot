@@ -47,4 +47,3 @@ jobs:
           fi
 
           gh pr merge "$pr_number" --repo "$REPO" --squash --delete-branch
-

@@ -1,4 +1,8 @@
 # Developer tooling targets. These do NOT run or deploy the bot.
+#
+# The checks here mirror the GitHub CI pipeline (.github/workflows/ci.yml):
+#   compile -> ruff -> bandit -> pip-audit -> smoke tests
+# so you can reproduce CI locally before pushing.
 
 PYTHON ?= python
 PIP ?= pip
@@ -25,6 +29,13 @@ help:
 	@echo "  make test-verbose        Run tests with verbose output"
 	@echo "  make test-coverage       Run tests with coverage report"
 	@echo "  make coverage-report     Generate HTML coverage report"
+	@echo ""
+	@echo "🔁 CI-equivalent checks (mirror .github/workflows/ci.yml):"
+	@echo "  make compile             Byte-compile all Python files"
+	@echo "  make bandit              Security scan with bandit (high severity)"
+	@echo "  make audit               Dependency audit with pip-audit"
+	@echo "  make smoke               Run offline smoke tests"
+	@echo "  make ci                  Run full CI-equivalent suite"
 	@echo ""
 	@echo "🔧 Install & Setup:"
 	@echo "  make install             Install dev dependencies"
@@ -147,6 +158,40 @@ coverage-report: test-coverage
 	else \
 		echo "Open htmlcov/index.html in your browser"; \
 	fi
+
+# ----- CI-equivalent checks (mirror .github/workflows/ci.yml) ----------------
+# These targets map 1:1 to the CI pipeline: compile -> lint -> bandit -> audit
+# -> smoke, runnable together via `make ci`.
+
+.PHONY: compile
+compile:
+	@echo "🛠️  Byte-compiling all Python files..."
+	$(PYTHON) -m compileall -q .
+	@echo "✅ Compile check complete"
+
+.PHONY: bandit
+bandit:
+	@echo "🔐 Security scan with bandit (high severity)..."
+	$(PYTHON) -m bandit -r . -c pyproject.toml --severity-level high
+	@echo "✅ Bandit scan complete"
+
+.PHONY: audit
+audit:
+	@echo "🔐 Dependency audit with pip-audit..."
+	$(PYTHON) -m pip_audit -r requirements.txt
+	@echo "✅ Audit complete"
+
+.PHONY: smoke
+smoke:
+	@echo "🧪 Running offline smoke tests with dummy credentials..."
+	OPENAI_API_KEY=local-dummy-openai-key \
+	TELEGRAM_TOKEN=local-dummy-telegram-token \
+	sh -c 'for f in scripts/smoke_test*.py; do echo "== $$f"; $(PYTHON) "$$f" || exit 1; done'
+	@echo "✅ Smoke tests passed"
+
+.PHONY: ci
+ci: compile lint bandit audit smoke
+	@echo "✅ Full CI-equivalent suite passed"
 
 .PHONY: codegraph
 codegraph:

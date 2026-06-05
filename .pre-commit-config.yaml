@@ -1,0 +1,40 @@
+# Pre-commit hooks for local checks that mirror the GitHub CI pipeline.
+# These run fast, offline checks only — no external API / network smoke tests.
+# Install once with:  pre-commit install
+# Run on everything:  pre-commit run --all-files
+#
+# Keep this aligned with .github/workflows/ci.yml (ruff + compileall live here too).
+
+repos:
+  # --- General hygiene (whitespace, EOF, large files, syntax of config files) ---
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: check-merge-conflict
+      - id: debug-statements
+      - id: detect-private-key
+
+  # --- Ruff lint (same tool and config as CI: pyproject.toml [tool.ruff]) ---
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.13.3
+    hooks:
+      - id: ruff-check
+
+  # --- Python byte-compile, mirrors CI "python -m compileall -q ." ---
+  - repo: local
+    hooks:
+      - id: compileall
+        name: python compileall (syntax check)
+        entry: python -m compileall -q
+        language: system
+        types: [python]
+        pass_filenames: true
