@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
 language: "zh-CN"
 
 tone_instructions: >
@@ -13,23 +14,20 @@ reviews:
   collapse_walkthrough: false
   sequence_diagrams: true
   request_changes_workflow: false
-
-auto_review:
-  enabled: true
-  drafts: false
-  base_branches:
-    - "master"
-    - "main"
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - "master"
+      - "main"
+  path_filters:
+    - "!logs/**"
+    - "!*.sqlite3"
+    - "!bot_data.sqlite3*"
+    - "!tmp/**"
+    - "!temp_*"
+    - "!frames_*"
+    - "!plog_cache/**"
 
 chat:
   auto_reply: true
-
-path_filters:
-  - "!logs/**"
-  - "!*.sqlite3"
-  - "!bot_data.sqlite3*"
-  - "!tmp/**"
-  - "!temp_*"
-  - "!frames_*"
-  - "!plog_cache/**"
-
