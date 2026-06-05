@@ -3,7 +3,7 @@ import asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.types import BusinessConnection
 
-from config import TELEGRAM_TOKEN
+from config import OXAPAY_WEBHOOK_ENABLED, TELEGRAM_TOKEN
 from db.core import close_db, init_db
 from routers.business import router as business_router
 from routers.media import router as media_router
@@ -13,6 +13,7 @@ from services.context_service import register_business_connection
 from services.daily_joke_scheduler import DailyJokeScheduler
 from services.rstory_store import close_store as close_rstory_store
 from services.rstory_store import init_store as init_rstory_store
+from services.rstory_webhook import start_webhook_server, stop_webhook_server
 from utils.logger import setup_logging
 
 logger = setup_logging()
@@ -47,6 +48,15 @@ async def main():
     daily_joke_scheduler = DailyJokeScheduler(bot)
     daily_joke_scheduler.start()
 
+    # OxaPay 支付 Webhook：polling 没有现成 HTTP server，按需附带起一个最小 aiohttp server。
+    # 仅当 RSTORY_PAYMENT_PROVIDER=oxapay（或 OXAPAY_WEBHOOK_ENABLED 强制）时启用。
+    webhook_runner = None
+    if OXAPAY_WEBHOOK_ENABLED:
+        try:
+            webhook_runner = await start_webhook_server()
+        except Exception as e:
+            logger.exception("oxapay webhook server start failed | err=%s", e)
+
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     except Exception as e:
@@ -58,6 +68,11 @@ async def main():
             await daily_joke_scheduler.stop()
         except Exception as e:
             logger.warning("daily_joke_scheduler stop failed in finally | err=%s", e)
+        # 关闭 OxaPay Webhook server（若启用）
+        try:
+            await stop_webhook_server(webhook_runner)
+        except Exception as e:
+            logger.warning("stop_webhook_server failed in finally | err=%s", e)
         # polling 结束后优雅关闭全局 DB 连接
         try:
             await close_db()

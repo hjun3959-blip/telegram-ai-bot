@@ -451,3 +451,46 @@ RSTORY_USDT_RECEIVE_ADDRESS = _env_str("RSTORY_USDT_RECEIVE_ADDRESS", "")
 
 # 剧情系统独立存储路径。默认与主库同文件（复用 SQLite 模式），但表与连接逻辑独立。
 RSTORY_DB_PATH = _env_str("RSTORY_DB_PATH", "") or DB_PATH
+
+
+# ===================== OxaPay 真实支付渠道（RSTORY_PAYMENT_PROVIDER=oxapay）=====================
+#
+# 设计原则与现有 config 一致：全部读环境变量、留占位、绝不硬编码任何密钥。
+# 用户拿到真实 key / 回调域名后只需填这些 env，无需改代码。
+# 上线 checklist 见 services/rstory_payment.py / services/rstory_webhook.py 顶部说明。
+#
+# 认证密钥（占位，用户后填）。绝不写死，绝不进日志。
+OXAPAY_MERCHANT_API_KEY = _env_str("OXAPAY_MERCHANT_API_KEY", "")
+# payout 类回调验签用（本场景只处理 invoice，payout key 仅占位备用）。
+OXAPAY_PAYOUT_API_KEY = _env_str("OXAPAY_PAYOUT_API_KEY", "")
+# OxaPay API 基址（含 /v1）。可通过 env 覆盖，便于联调指向 mock / 沙盒。
+OXAPAY_API_BASE = _env_str("OXAPAY_API_BASE", "https://api.oxapay.com/v1") or "https://api.oxapay.com/v1"
+# 公网 HTTPS 回调基址（用户后填，例如 https://bot.example.com）+ 回调路径。
+# 两者拼成 callback_url 传给 OxaPay；OxaPay 不会回调到私网/localhost。
+OXAPAY_CALLBACK_BASE_URL = _env_str("OXAPAY_CALLBACK_BASE_URL", "")
+OXAPAY_CALLBACK_PATH = _env_str("OXAPAY_CALLBACK_PATH", "/rstory/oxapay/webhook") or "/rstory/oxapay/webhook"
+# 支付完成后用户浏览器跳转地址（可选）。
+OXAPAY_RETURN_URL = _env_str("OXAPAY_RETURN_URL", "")
+# 发票有效期（分钟）。OxaPay 限制 15–2880，default 60。
+OXAPAY_INVOICE_LIFETIME_MIN = _env_int("OXAPAY_INVOICE_LIFETIME_MIN", 60, min_value=15)
+if OXAPAY_INVOICE_LIFETIME_MIN > 2880:
+    OXAPAY_INVOICE_LIFETIME_MIN = 2880
+# 沙盒开关：默认 true 便于联调；上线务必改 false（OXAPAY_SANDBOX=false）。
+_OXAPAY_SANDBOX_RAW = _env_str("OXAPAY_SANDBOX", "true").lower()
+OXAPAY_SANDBOX = _OXAPAY_SANDBOX_RAW in {"1", "true", "yes", "on"}
+# HTTP 请求超时（秒）。
+OXAPAY_HTTP_TIMEOUT_SECONDS = _env_int("OXAPAY_HTTP_TIMEOUT_SECONDS", 20, min_value=1)
+
+# 内嵌 Webhook HTTP server 开关与监听地址。
+# polling 模式没有现成 HTTP server；启用 oxapay 时在 app 里附带起一个最小 aiohttp server。
+# 默认仅当 RSTORY_PAYMENT_PROVIDER=oxapay 时启用；也可用 OXAPAY_WEBHOOK_ENABLED 强制开关。
+_OXAPAY_WEBHOOK_ENABLED_RAW = _env_str("OXAPAY_WEBHOOK_ENABLED", "").lower()
+if _OXAPAY_WEBHOOK_ENABLED_RAW in {"1", "true", "yes", "on"}:
+    OXAPAY_WEBHOOK_ENABLED = True
+elif _OXAPAY_WEBHOOK_ENABLED_RAW in {"0", "false", "no", "off"}:
+    OXAPAY_WEBHOOK_ENABLED = False
+else:
+    OXAPAY_WEBHOOK_ENABLED = RSTORY_PAYMENT_PROVIDER == "oxapay"
+# 监听地址/端口（容器内监听 0.0.0.0；公网由反代/隧道转发到 OXAPAY_CALLBACK_BASE_URL）。
+OXAPAY_WEBHOOK_HOST = _env_str("OXAPAY_WEBHOOK_HOST", "0.0.0.0") or "0.0.0.0"  # nosec B104
+OXAPAY_WEBHOOK_PORT = _env_int("OXAPAY_WEBHOOK_PORT", 8080, min_value=1)

@@ -35,6 +35,7 @@ logger = setup_logging()
 # 状态常量：支付订单生命周期。
 CHARGE_PENDING = "pending"
 CHARGE_CONFIRMED = "confirmed"
+CHARGE_PAID = "paid"  # 真实渠道（OxaPay）Webhook 回调确认到账时的终态。
 CHARGE_FAILED = "failed"
 
 
@@ -66,12 +67,28 @@ CREATE TABLE IF NOT EXISTS rstory_charges (
     status TEXT NOT NULL,
     pay_address TEXT,
     pay_info TEXT,
+    track_id TEXT,
+    payment_url TEXT,
     created_at TEXT NOT NULL,
     confirmed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_rstory_charges_user ON rstory_charges(user_id, character);
+CREATE INDEX IF NOT EXISTS idx_rstory_charges_track ON rstory_charges(track_id);
 CREATE INDEX IF NOT EXISTS idx_rstory_unlocks_user ON rstory_unlocks(user_id, character);
 """
+
+
+async def _migrate_charges_columns(conn: aiosqlite.Connection) -> None:
+    """为已存在的旧 rstory_charges 表补 track_id / payment_url 列（幂等）。
+
+    新建库走 INIT_SQL 已含这些列；旧库（commit 9d14a62 建的）缺列，这里 ALTER 补上。
+    SQLite 没有 ADD COLUMN IF NOT EXISTS，先查 PRAGMA table_info 再决定。
+    """
+    async with conn.execute("PRAGMA table_info(rstory_charges)") as cur:
+        cols = {row[1] for row in await cur.fetchall()}
+    for col in ("track_id", "payment_url"):
+        if col not in cols:
+            await conn.execute(f"ALTER TABLE rstory_charges ADD COLUMN {col} TEXT")
 
 
 # ---------------- 独立连接状态（与 db.core 完全分开）----------------
@@ -98,6 +115,7 @@ async def _ensure_conn() -> aiosqlite.Connection:
         await conn.execute("PRAGMA journal_mode=WAL;")
         await conn.execute("PRAGMA synchronous=NORMAL;")
         await conn.executescript(INIT_SQL)
+        await _migrate_charges_columns(conn)
         await conn.commit()
         _db = conn
         logger.info("rstory store opened | path=%s", RSTORY_DB_PATH)
@@ -166,6 +184,8 @@ class Charge:
     status: str
     pay_address: str | None
     pay_info: str | None
+    track_id: str | None
+    payment_url: str | None
     created_at: str
     confirmed_at: str | None
 
@@ -254,14 +274,16 @@ async def create_charge_record(
     provider: str,
     pay_address: str | None = None,
     pay_info: str | None = None,
+    track_id: str | None = None,
+    payment_url: str | None = None,
 ) -> Charge:
     """写入一条 pending 支付记录。"""
     now = _now_iso()
     await _execute(
         "INSERT INTO rstory_charges "
         "(charge_id, user_id, character, stage, usdt_amount, provider, status, "
-        "pay_address, pay_info, created_at, confirmed_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+        "pay_address, pay_info, track_id, payment_url, created_at, confirmed_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
         (
             charge_id,
             _norm_uid(user_id),
@@ -272,6 +294,8 @@ async def create_charge_record(
             CHARGE_PENDING,
             pay_address,
             pay_info,
+            track_id,
+            payment_url,
             now,
         ),
     )
@@ -285,20 +309,20 @@ async def create_charge_record(
         status=CHARGE_PENDING,
         pay_address=pay_address,
         pay_info=pay_info,
+        track_id=track_id,
+        payment_url=payment_url,
         created_at=now,
         confirmed_at=None,
     )
 
 
-async def get_charge(charge_id: str) -> Charge | None:
-    row = await _fetchone(
-        "SELECT charge_id, user_id, character, stage, usdt_amount, provider, status, "
-        "pay_address, pay_info, created_at, confirmed_at "
-        "FROM rstory_charges WHERE charge_id = ?",
-        (charge_id,),
-    )
-    if not row:
-        return None
+_CHARGE_COLS = (
+    "charge_id, user_id, character, stage, usdt_amount, provider, status, "
+    "pay_address, pay_info, track_id, payment_url, created_at, confirmed_at"
+)
+
+
+def _row_to_charge(row: aiosqlite.Row) -> Charge:
     return Charge(
         charge_id=row["charge_id"],
         user_id=row["user_id"],
@@ -309,16 +333,50 @@ async def get_charge(charge_id: str) -> Charge | None:
         status=row["status"],
         pay_address=row["pay_address"],
         pay_info=row["pay_info"],
+        track_id=row["track_id"],
+        payment_url=row["payment_url"],
         created_at=row["created_at"],
         confirmed_at=row["confirmed_at"],
     )
 
 
+async def get_charge(charge_id: str) -> Charge | None:
+    row = await _fetchone(
+        f"SELECT {_CHARGE_COLS} FROM rstory_charges WHERE charge_id = ?",
+        (charge_id,),
+    )
+    return _row_to_charge(row) if row else None
+
+
+async def get_charge_by_track_id(track_id: str) -> Charge | None:
+    """按 OxaPay track_id 找订单（Webhook 对账用，order_id 缺失时的兜底）。"""
+    if not track_id:
+        return None
+    row = await _fetchone(
+        f"SELECT {_CHARGE_COLS} FROM rstory_charges WHERE track_id = ? "
+        "ORDER BY created_at DESC LIMIT 1",
+        (track_id,),
+    )
+    return _row_to_charge(row) if row else None
+
+
+async def set_charge_track(charge_id: str, track_id: str | None, payment_url: str | None) -> None:
+    """回填 OxaPay 返回的 track_id / payment_url（创建发票成功后调用）。"""
+    await _execute(
+        "UPDATE rstory_charges SET track_id = ?, payment_url = ? WHERE charge_id = ?",
+        (track_id, payment_url, charge_id),
+    )
+
+
+# status 在这两个值时写 confirmed_at（视为已到账确认）。
+_CONFIRMED_STATUSES = {CHARGE_CONFIRMED, CHARGE_PAID}
+
+
 async def update_charge_status(charge_id: str, status: str) -> None:
-    """更新支付状态；status=confirmed 时同时写 confirmed_at。"""
-    confirmed_at = _now_iso() if status == CHARGE_CONFIRMED else None
+    """更新支付状态；status=confirmed/paid 时同时写 confirmed_at（幂等：COALESCE 不覆盖已有时间）。"""
+    confirmed_at = _now_iso() if status in _CONFIRMED_STATUSES else None
     await _execute(
         "UPDATE rstory_charges SET status = ?, "
-        "confirmed_at = COALESCE(?, confirmed_at) WHERE charge_id = ?",
+        "confirmed_at = COALESCE(confirmed_at, ?) WHERE charge_id = ?",
         (status, confirmed_at, charge_id),
     )
