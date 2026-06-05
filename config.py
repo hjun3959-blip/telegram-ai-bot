@@ -420,3 +420,34 @@ DAILY_JOKE_RECIPIENTS = {
     if x
 }
 DAILY_JOKE_BEIBEI_CHAT_IDS = _env_list("DAILY_JOKE_BEIBEI_CHAT_IDS", [])
+
+# ===================== R 级互动剧情系统（FSM 引擎骨架）=====================
+#
+# 剧情系统的可配置项集中放这里，与现有 config 风格一致（_env_* 读取，含默认值）。
+# 设计原则：
+# - 解锁直接收 USDT，不走 Telegram Stars / XTR / send_invoice（用户明确决定）。
+# - 三个阶段“每深入一个阶段付费一次”，金额是集中可配置常量，便于后续调价。
+# - 支付渠道用可插拔抽象（services/rstory_payment.py），默认 Mock，后续换真实链上渠道
+#   只需改 RSTORY_PAYMENT_PROVIDER 与新增 Provider 实现，无需动 FSM / store / 路由。
+#
+# 阶段定价（USDT）：阶段1纯文字 2、阶段2图文 3、阶段3视频 5。
+RSTORY_STAGE1_USDT = _env_float("RSTORY_STAGE1_USDT", 2.0, min_value=0.0)
+RSTORY_STAGE2_USDT = _env_float("RSTORY_STAGE2_USDT", 3.0, min_value=0.0)
+RSTORY_STAGE3_USDT = _env_float("RSTORY_STAGE3_USDT", 5.0, min_value=0.0)
+
+# 阶段号 -> USDT 金额。集中查表，FSM / payment / 路由都从这里读，避免散落硬编码。
+RSTORY_STAGE_PRICES_USDT: dict[int, float] = {
+    1: RSTORY_STAGE1_USDT,
+    2: RSTORY_STAGE2_USDT,
+    3: RSTORY_STAGE3_USDT,
+}
+
+# 默认支付渠道标识。"mock" -> MockUSDTProvider（可手动标记已支付，跑通完整流程）。
+# 后续接入真实 TRC20 等链上渠道时，新增 provider 实现并把这里改成对应标识即可。
+RSTORY_PAYMENT_PROVIDER = (_env_str("RSTORY_PAYMENT_PROVIDER", "mock") or "mock").lower()
+
+# 收款地址占位（真实渠道接入前仅作展示用，Mock 也会回显）。不放真实私钥/助记词。
+RSTORY_USDT_RECEIVE_ADDRESS = _env_str("RSTORY_USDT_RECEIVE_ADDRESS", "")
+
+# 剧情系统独立存储路径。默认与主库同文件（复用 SQLite 模式），但表与连接逻辑独立。
+RSTORY_DB_PATH = _env_str("RSTORY_DB_PATH", "") or DB_PATH

@@ -8,8 +8,11 @@ from db.core import close_db, init_db
 from routers.business import router as business_router
 from routers.media import router as media_router
 from routers.private import router as private_router
+from routers.rstory import router as rstory_router
 from services.context_service import register_business_connection
 from services.daily_joke_scheduler import DailyJokeScheduler
+from services.rstory_store import close_store as close_rstory_store
+from services.rstory_store import init_store as init_rstory_store
 from utils.logger import setup_logging
 
 logger = setup_logging()
@@ -19,6 +22,8 @@ async def main():
     if not TELEGRAM_TOKEN:
         raise RuntimeError("缺少 TELEGRAM_TOKEN 环境变量")
     await init_db()
+    # 剧情系统独立存储：自包含建表，初始化与主库分开（互不影响）。
+    await init_rstory_store()
     bot = Bot(token=TELEGRAM_TOKEN)
     dp = Dispatcher()
 
@@ -29,10 +34,13 @@ async def main():
     async def _on_business_connection(connection: BusinessConnection):
         register_business_connection(connection)
 
+    # rstory 先于 private 注册：private 有 F.text 兜底 handler，会吞掉 /rstory；
+    # rstory 用 Command/CallbackQuery 精确过滤，放前面优先命中，不影响其它命令。
+    dp.include_router(rstory_router)
     dp.include_router(private_router)
     dp.include_router(business_router)
     dp.include_router(media_router)
-    logger.info("bot startup | routers=private,business,media")
+    logger.info("bot startup | routers=rstory,private,business,media")
 
     # 每天一个笑话：内部定时任务。不阻塞 polling；shutdown 时 await stop()。
     # config 里 DAILY_JOKE_ENABLED=False 时 start() 直接 noop。
@@ -55,6 +63,11 @@ async def main():
             await close_db()
         except Exception as e:
             logger.warning("close_db failed in finally | err=%s", e)
+        # 关闭剧情系统独立存储连接
+        try:
+            await close_rstory_store()
+        except Exception as e:
+            logger.warning("close_rstory_store failed in finally | err=%s", e)
 
 
 if __name__ == "__main__":
