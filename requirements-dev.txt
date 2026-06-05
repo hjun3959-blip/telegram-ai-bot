@@ -13,7 +13,6 @@ flake8==7.0.0
 # Type checking
 mypy==1.8.0
 types-aiofiles>=24.1.0.20240106
-types-python-dotenv>=1.0.1
 
 # Testing
 pytest==7.4.4
@@ -23,6 +22,7 @@ pytest-mock==3.12.0
 
 # Security scanning
 bandit==1.7.5
+pbr>=5.0  # required at runtime by bandit (via pbr.version) but not pulled in transitively
 pip-audit==2.6.1
 
 # Pre-commit hooks
