@@ -42,15 +42,18 @@ COPYFIX_SYSTEM = (
 
 
 # Unicode emoji 粗粒度匹配：覆盖常见表情/符号/旗帜区段。够用即可，不追求完备。
+# 用 (low, high) 码点对构造字符类，而不是把 astral（>U+FFFF）码点直接内联进字符类字面量，
+# 避免静态分析（CodeQL py/overly-large-range）对代理对表示的误判；编译结果完全等价。
+_EMOJI_RANGES = (
+    (0x1F300, 0x1FAFF),  # 杂项符号与象形 / 补充符号
+    (0x2600, 0x27BF),  # 杂项符号 + dingbats
+    (0x1F1E6, 0x1F1FF),  # 区域指示符（旗帜）
+    (0xFE00, 0xFE0F),  # 变体选择符
+    (0x2190, 0x21FF),  # 箭头
+    (0x2B00, 0x2BFF),  # 杂项符号与箭头
+)
 _EMOJI_PATTERN = re.compile(
-    "["
-    "\U0001F300-\U0001FAFF"  # 杂项符号与象形 / 补充符号
-    "\U00002600-\U000027BF"  # 杂项符号 + dingbats
-    "\U0001F1E6-\U0001F1FF"  # 区域指示符（旗帜）
-    "\U0000FE00-\U0000FE0F"  # 变体选择符
-    "\U00002190-\U000021FF"  # 箭头
-    "\U00002B00-\U00002BFF"  # 杂项符号与箭头
-    "]"
+    "[" + "".join(f"{chr(lo)}-{chr(hi)}" for lo, hi in _EMOJI_RANGES) + "]"
 )
 
 # 文案里常见的贴纸 / 表情占位写法，例如 [贴纸] [sticker] :smile: (笑)
