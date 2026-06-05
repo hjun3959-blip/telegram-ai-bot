@@ -46,6 +46,11 @@ CHARGE_FAILED = "failed"
 
 # 解锁来源默认值（统一 USDT / OxaPay）。
 UNLOCK_SOURCE_OXAPAY = "oxapay"
+# 内测放行写入的解锁来源标记（config.RSTORY_TEST_MODE=True 时）。
+# 内测后清理这些测试解锁记录（不影响真实付费解锁）：
+#   sqlite3 <RSTORY_DB_PATH> "DELETE FROM user_unlocks WHERE source = 'test_mode';"
+# 对应库为 RSTORY_DB_PATH（默认与主库 BOT_DB_PATH 同文件）。
+UNLOCK_SOURCE_TEST_MODE = "test_mode"
 
 _SEED_SQL_PATH = Path(__file__).resolve().parent.parent / "db" / "rstory_seed.sql"
 

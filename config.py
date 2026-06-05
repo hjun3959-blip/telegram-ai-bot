@@ -456,6 +456,15 @@ for _unlock_id, _env_key in _RSTORY_PRICE_OVERRIDE_KEYS.items():
 # "oxapay" -> 真实 OxaPay 渠道。
 RSTORY_PAYMENT_PROVIDER = (_env_str("RSTORY_PAYMENT_PROVIDER", "mock") or "mock").lower()
 
+# 内测模式开关。默认 False = 正常收费（走 create_charge / OxaPay）。
+# True = 内测放行：所有 payment_gate 直接视同已解锁、跳过收款流程，方便完整走完全部剧情验证文案与节奏。
+# 仅影响 payment_gate 的收款动作；年龄门（age_gate）、FSM 推进、condition/effect 数值、
+# stat_history、relationship 跃升等全部照常。放行写入的 user_unlocks 用 source=test_mode 标记，
+# 便于内测后清理（见 services/rstory_store.py UNLOCK_SOURCE_TEST_MODE 注释）。
+# 内测完成后：删除/设 RSTORY_TEST_MODE=false 并填好 OXAPAY_* / RSTORY_PAYMENT_PROVIDER=oxapay 即恢复正常收费。
+_RSTORY_TEST_MODE_RAW = _env_str("RSTORY_TEST_MODE", "false").lower()
+RSTORY_TEST_MODE = _RSTORY_TEST_MODE_RAW in {"1", "true", "yes", "on"}
+
 # 收款地址占位（真实渠道接入前仅作展示用，Mock 也会回显）。不放真实私钥/助记词。
 RSTORY_USDT_RECEIVE_ADDRESS = _env_str("RSTORY_USDT_RECEIVE_ADDRESS", "")
 

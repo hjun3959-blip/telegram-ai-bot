@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import config
 from services import rstory_store as store
 from utils.logger import setup_logging
 
@@ -374,6 +375,22 @@ async def _gate_or_scene(
                 f"payment_gate scene {scene.scene_id} has no unlock product for level {scene.content_level}"
             )
         if not await store.is_unlocked(user_id, product.unlock_id):
+            # 内测模式：跳过 create_charge / 支付流程，直接视同已解锁。
+            # 只放行收款动作——写一条 source=test_mode 的解锁记录后，照常走 payment 转移跃迁。
+            # 其余（年龄门、FSM 推进、数值、stat_history、relationship）不受影响。
+            if config.RSTORY_TEST_MODE:
+                await store.record_unlock(
+                    user_id, product.unlock_id, source=store.UNLOCK_SOURCE_TEST_MODE
+                )
+                logger.info(
+                    "rstory TEST_MODE payment_gate 放行 | user=%s unlock=%s scene=%s level=%s "
+                    "(跳过收款，source=test_mode)",
+                    user_id,
+                    product.unlock_id,
+                    scene.scene_id,
+                    scene.content_level,
+                )
+                return await consume_payment(user_id, script_id, f"{product.unlock_id}_paid")
             return AdvanceResult(
                 status=STATUS_NEEDS_UNLOCK,
                 script_id=script_id,
