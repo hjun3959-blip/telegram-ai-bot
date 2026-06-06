@@ -1,0 +1,206 @@
+name: Manual Deploy
+
+# Manually-triggered production deployment.
+# Deploys the current `master` to the production server over SSH.
+#
+# Required repository secrets (already configured):
+#   DEPLOY_SSH_HOST      - production server hostname / IP
+#   DEPLOY_SSH_PORT      - SSH port
+#   DEPLOY_SSH_USER      - SSH user
+#   DEPLOY_SSH_KEY       - private SSH key (PEM) for that user
+#   DEPLOY_APP_PATH      - absolute path of the deployed git checkout on the server
+#   DEPLOY_SERVICE_NAME  - systemd service name to restart
+#
+# This workflow never checks out or modifies bot business logic; it only
+# instructs the server to fast-forward its existing checkout to origin/master.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "deploy" to confirm production deployment'
+        required: true
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy master to production
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate confirmation input
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "deploy" ]; then
+            echo "::error::Confirmation failed. Re-run and type 'deploy' in the confirm field."
+            exit 1
+          fi
+
+      - name: Validate required secrets are present
+        env:
+          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT }}
+          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_APP_PATH: ${{ secrets.DEPLOY_APP_PATH }}
+          DEPLOY_SERVICE_NAME: ${{ secrets.DEPLOY_SERVICE_NAME }}
+        run: |
+          missing=0
+          for name in DEPLOY_SSH_HOST DEPLOY_SSH_PORT DEPLOY_SSH_USER \
+                      DEPLOY_SSH_KEY DEPLOY_APP_PATH DEPLOY_SERVICE_NAME; do
+            # shellcheck disable=SC2086
+            if [ -z "${!name}" ]; then
+              echo "::error::Required secret ${name} is not set."
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+          echo "All required deployment secrets are present."
+
+      - name: Configure SSH key and known_hosts
+        env:
+          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          # Private key -> file with strict perms (never echoed).
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          # Strict host key handling: pin the server's key via ssh-keyscan
+          # instead of disabling verification.
+          : > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+          if ! ssh-keyscan -p "$DEPLOY_SSH_PORT" -H "$DEPLOY_SSH_HOST" \
+                >> ~/.ssh/known_hosts 2>/dev/null; then
+            echo "::error::ssh-keyscan failed for ${DEPLOY_SSH_HOST}:${DEPLOY_SSH_PORT}"
+            exit 1
+          fi
+          if [ ! -s ~/.ssh/known_hosts ]; then
+            echo "::error::ssh-keyscan returned no host keys."
+            exit 1
+          fi
+
+      - name: Run remote deployment
+        env:
+          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT }}
+          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          DEPLOY_APP_PATH: ${{ secrets.DEPLOY_APP_PATH }}
+          DEPLOY_SERVICE_NAME: ${{ secrets.DEPLOY_SERVICE_NAME }}
+        run: |
+          set -euo pipefail
+
+          # The remote script. App path and service name are passed as
+          # positional args so the script body contains no secrets.
+          remote_script='
+            set -euo pipefail
+            APP_PATH="$1"
+            SERVICE_NAME="$2"
+            TS="$(date +%Y%m%d_%H%M%S)"
+            BACKUP_ENV="/tmp/${SERVICE_NAME}_env_backup_${TS}"
+
+            echo "==> Verifying target path: ${APP_PATH}"
+            if [ -z "${APP_PATH}" ] || [ ! -d "${APP_PATH}" ]; then
+              echo "[ERROR] Target path does not exist: ${APP_PATH}" >&2
+              exit 1
+            fi
+            cd "${APP_PATH}"
+            if [ ! -d .git ]; then
+              echo "[ERROR] Target path is not a git checkout: ${APP_PATH}" >&2
+              exit 1
+            fi
+
+            echo "==> Backing up current .env to ${BACKUP_ENV}"
+            if [ -f .env ]; then
+              cp -a .env "${BACKUP_ENV}"
+              echo "    .env backed up."
+            else
+              echo "    No .env found; nothing to back up."
+            fi
+
+            echo "==> Fetching origin master"
+            git fetch --prune origin master
+
+            echo "==> Resetting hard to origin/master"
+            git reset --hard origin/master
+
+            echo "==> Restoring .env"
+            if [ -f "${BACKUP_ENV}" ]; then
+              cp -a "${BACKUP_ENV}" .env
+              echo "    .env restored."
+            else
+              echo "    No .env backup to restore."
+            fi
+
+            echo "==> Fixing ownership (best effort)"
+            OWNER="$(stat -c %U:%G "${APP_PATH}" 2>/dev/null || true)"
+            if [ -n "${OWNER}" ]; then
+              if chown -R "${OWNER}" "${APP_PATH}" 2>/dev/null; then
+                echo "    ownership set to ${OWNER}"
+              elif sudo -n chown -R "${OWNER}" "${APP_PATH}" 2>/dev/null; then
+                echo "    ownership set to ${OWNER} (via sudo)"
+              else
+                echo "    skipped (insufficient privileges)"
+              fi
+            fi
+
+            echo "==> Compiling Python sources (syntax check)"
+            python3 -m compileall -q .
+
+            echo "==> Installing requirements (if present)"
+            if [ -f requirements.txt ]; then
+              if [ -x .venv/bin/pip ]; then
+                .venv/bin/pip install -r requirements.txt
+              else
+                python3 -m pip install -r requirements.txt
+              fi
+            else
+              echo "    No requirements.txt; skipping."
+            fi
+
+            echo "==> Restarting systemd service: ${SERVICE_NAME}"
+            if systemctl restart "${SERVICE_NAME}" 2>/dev/null; then
+              echo "    restarted."
+            elif sudo -n systemctl restart "${SERVICE_NAME}" 2>/dev/null; then
+              echo "    restarted (via sudo)."
+            else
+              echo "[ERROR] Failed to restart ${SERVICE_NAME}" >&2
+              exit 1
+            fi
+
+            echo "==> Service status"
+            systemctl status "${SERVICE_NAME}" --no-pager --lines=0 2>/dev/null \
+              || sudo -n systemctl status "${SERVICE_NAME}" --no-pager --lines=0 2>/dev/null \
+              || true
+
+            echo "==> Recent logs"
+            journalctl -u "${SERVICE_NAME}" --no-pager -n 40 2>/dev/null \
+              || sudo -n journalctl -u "${SERVICE_NAME}" --no-pager -n 40 2>/dev/null \
+              || echo "    (journalctl unavailable)"
+
+            echo "==> Deployment complete."
+          '
+
+          ssh -i ~/.ssh/deploy_key \
+              -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile=~/.ssh/known_hosts \
+              -p "$DEPLOY_SSH_PORT" \
+              "${DEPLOY_SSH_USER}@${DEPLOY_SSH_HOST}" \
+              "bash -s -- '${DEPLOY_APP_PATH}' '${DEPLOY_SERVICE_NAME}'" \
+              <<< "$remote_script"
+
+      - name: Clean up SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
