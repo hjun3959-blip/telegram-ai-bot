@@ -465,6 +465,51 @@ RSTORY_PAYMENT_PROVIDER = (_env_str("RSTORY_PAYMENT_PROVIDER", "mock") or "mock"
 _RSTORY_TEST_MODE_RAW = _env_str("RSTORY_TEST_MODE", "false").lower()
 RSTORY_TEST_MODE = _RSTORY_TEST_MODE_RAW in {"1", "true", "yes", "on"}
 
+# 内测白名单：仅列出的 Telegram 数字用户 ID 免门内测（付费门 + 年龄门都放行），
+# 系统对名单之外的所有用户保持正常收费 + 年龄验证。
+# 与 RSTORY_TEST_MODE 是 OR 关系（见 rstory_test_bypass）：
+#   RSTORY_TEST_MODE=True（全员放行，原行为）或 user_id in RSTORY_TEST_WHITELIST（仅该用户放行）。
+# 默认含云赫（@Pay9l）的测试 ID 7256055877；可用环境变量 RSTORY_TEST_WHITELIST 覆盖（逗号分隔数字 ID）。
+# 放行写入的 user_unlocks 仍用 source=test_mode 标记，内测后可统一清理（见 services/rstory_store.py）。
+_RSTORY_TEST_WHITELIST_DEFAULT = {"7256055877"}
+
+
+def _env_int_set(name: str, default: set[str]) -> set[int]:
+    """读取逗号分隔的数字 ID 列表为 int 集合；非法 token 跳过；为空回落默认。"""
+    raw = os.getenv(name, "")
+    items = _split_csv(raw)
+    source = items if items else list(default)
+    out: set[int] = set()
+    for token in source:
+        try:
+            out.add(int(token))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+RSTORY_TEST_WHITELIST: set[int] = _env_int_set(
+    "RSTORY_TEST_WHITELIST", _RSTORY_TEST_WHITELIST_DEFAULT
+)
+
+
+def rstory_test_bypass(user_id: int | str) -> tuple[bool, str]:
+    """判断某 user_id 是否应内测放行（付费门 + 年龄门都跳过）。
+
+    返回 (是否放行, 命中原因)；reason ∈ {"global", "whitelist", ""}。
+    放行条件（OR）：RSTORY_TEST_MODE=True（全员）或 user_id 在 RSTORY_TEST_WHITELIST（仅该用户）。
+    user_id 容忍 str/int；无法解析为 int 时只看全局开关。
+    """
+    if RSTORY_TEST_MODE:
+        return True, "global"
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return False, ""
+    if uid in RSTORY_TEST_WHITELIST:
+        return True, "whitelist"
+    return False, ""
+
 # 收款地址占位（真实渠道接入前仅作展示用，Mock 也会回显）。不放真实私钥/助记词。
 RSTORY_USDT_RECEIVE_ADDRESS = _env_str("RSTORY_USDT_RECEIVE_ADDRESS", "")
 

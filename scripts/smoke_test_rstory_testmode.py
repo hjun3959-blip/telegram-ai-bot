@@ -5,7 +5,7 @@
    - 不创建任何 rstory_charges（不走 create_charge / 收款流程）。
    - 写入一条 source=test_mode 的 user_unlocks 解锁记录。
    - payment 转移正常跃迁（relationship / flag / 数值照常）。
-2) test_mode 下 age_gate 仍要求年龄验证，不被放行绕过（未验证 → NEEDS_AGE）。
+2) test_mode 下 age_gate 也对放行用户跳过：视同已验证年龄、写 content_access_log 审计，继续跃迁。
 3) RSTORY_TEST_MODE=False 时同一条 payment_gate 仍走原 create_charge 流程（mock），
    未解锁返回 NEEDS_UNLOCK；解锁来源为 oxapay（非 test_mode）。
 4) 清理：DELETE FROM user_unlocks WHERE source='test_mode' 只清掉测试解锁，不误删真实解锁。
@@ -99,19 +99,19 @@ async def main() -> None:
     assert rel.flags.get("a_intimate_entered") is True, rel.flags
     print("[ok] TEST_MODE=True：payment_gate 直接放行（无 charge），写 source=test_mode unlock，正常跃迁 intimate")
 
-    # ---------- A2) test_mode 下 age_gate 仍要求年龄验证（不被绕过）----------
-    # confess 落到 age_gate；未验证 → NEEDS_AGE，绝不因 test_mode 放行。
+    # ---------- A2) test_mode 下 age_gate 也对放行用户跳过（含审计 + 后续 nsfw payment 放行）----------
+    # 升级后语义：RSTORY_TEST_MODE=True 视同已验证年龄，age_gate 直接放行（仍写 content_access_log 审计）。
+    # confess 落到 age_gate → 自动放行 → 继续走到 nsfw payment_gate → 又放行，最终落到 a_lina_devotion。
     await fsm.try_choice(uid_t, LINE_A, "linger")  # desire 升到阈值，confess 可推进到 age_gate
     r_age = await fsm.try_choice(uid_t, LINE_A, "confess")
-    assert r_age.status == fsm.STATUS_NEEDS_AGE, r_age
-    assert await store.is_age_verified(uid_t) is False
-    # 验证年龄后才放行；放行后立刻落到下一个 nsfw payment_gate，test_mode 又直接放行。
-    await store.set_age_verified(uid_t)
-    r_after_age = await fsm.consume_age_verify(uid_t, LINE_A)
-    assert r_after_age.status == fsm.STATUS_OK, r_after_age
-    assert r_after_age.scene.scene_id == "a_lina_devotion", r_after_age.scene.scene_id
+    assert r_age.status == fsm.STATUS_OK, r_age
+    assert r_age.scene.scene_id == "a_lina_devotion", r_age.scene.scene_id
+    # age_gate 放行视同已验证年龄，并写了 content_access_log 审计痕迹（age_verified=1）。
+    assert await store.is_age_verified(uid_t) is True
+    access = await store.list_content_access(uid_t)
+    assert any(r["age_verified"] for r in access), access
     assert await store.is_unlocked(uid_t, "nsfw_lina") is True
-    print("[ok] TEST_MODE=True：age_gate 仍要求年龄验证（NEEDS_AGE，未被放行绕过）；验证后 nsfw payment 再放行")
+    print("[ok] TEST_MODE=True：age_gate 也放行（视同已验证 + 写 content_access_log 审计），nsfw payment 再放行")
 
     await store.close_store()
 

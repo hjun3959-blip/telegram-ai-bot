@@ -375,16 +375,19 @@ async def _gate_or_scene(
                 f"payment_gate scene {scene.scene_id} has no unlock product for level {scene.content_level}"
             )
         if not await store.is_unlocked(user_id, product.unlock_id):
-            # 内测模式：跳过 create_charge / 支付流程，直接视同已解锁。
+            # 内测放行（全局 RSTORY_TEST_MODE 或 user_id 命中 RSTORY_TEST_WHITELIST）：
+            # 跳过 create_charge / 支付流程，直接视同已解锁。
             # 只放行收款动作——写一条 source=test_mode 的解锁记录后，照常走 payment 转移跃迁。
-            # 其余（年龄门、FSM 推进、数值、stat_history、relationship）不受影响。
-            if config.RSTORY_TEST_MODE:
+            # 其余（FSM 推进、数值、stat_history、relationship）不受影响。
+            bypass, reason = config.rstory_test_bypass(user_id)
+            if bypass:
                 await store.record_unlock(
                     user_id, product.unlock_id, source=store.UNLOCK_SOURCE_TEST_MODE
                 )
                 logger.info(
-                    "rstory TEST_MODE payment_gate 放行 | user=%s unlock=%s scene=%s level=%s "
+                    "rstory 内测放行 payment_gate | via=%s user=%s unlock=%s scene=%s level=%s "
                     "(跳过收款，source=test_mode)",
+                    reason,
                     user_id,
                     product.unlock_id,
                     scene.scene_id,
@@ -405,6 +408,23 @@ async def _gate_or_scene(
 
     if scene.state_type == "age_gate":
         if not await store.is_age_verified(user_id):
+            # 内测放行：白名单用户（或全局开关）视同已验证年龄，跳过 age_gate。
+            # 仍写一条 content_access_log（age_verified=True）保留审计痕迹，标测试来源。
+            bypass, reason = config.rstory_test_bypass(user_id)
+            if bypass:
+                await store.set_age_verified(user_id)
+                await store.log_content_access(
+                    user_id, scene.content_level, scene.scene_id, True
+                )
+                logger.info(
+                    "rstory 内测放行 age_gate | via=%s user=%s scene=%s level=%s "
+                    "(视同已验证年龄，写 content_access_log 审计)",
+                    reason,
+                    user_id,
+                    scene.scene_id,
+                    scene.content_level,
+                )
+                return await consume_age_verify(user_id, script_id)
             return AdvanceResult(
                 status=STATUS_NEEDS_AGE,
                 script_id=script_id,
