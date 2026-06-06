@@ -3,8 +3,9 @@ import asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.types import BusinessConnection
 
-from config import OXAPAY_WEBHOOK_ENABLED, TELEGRAM_TOKEN
+from config import ADMIN_AGENT_ENABLED, OXAPAY_WEBHOOK_ENABLED, TELEGRAM_TOKEN
 from db.core import close_db, init_db
+from routers.admin_agent import router as admin_agent_router
 from routers.business import router as business_router
 from routers.media import router as media_router
 from routers.private import router as private_router
@@ -38,10 +39,18 @@ async def main():
     # rstory 先于 private 注册：private 有 F.text 兜底 handler，会吞掉 /rstory；
     # rstory 用 Command/CallbackQuery 精确过滤，放前面优先命中，不影响其它命令。
     dp.include_router(rstory_router)
+    # 管理员对话网关：owner-only + 私聊 only。必须在 private（含 F.text 兜底）之前注册，
+    # 命令与「有活跃会话时的文本兜底」才能优先命中；ADMIN_AGENT_ENABLED=False 时其 handler
+    # 内部硬门禁直接 return，等价 noop，不影响既有路由。
+    if ADMIN_AGENT_ENABLED:
+        dp.include_router(admin_agent_router)
     dp.include_router(private_router)
     dp.include_router(business_router)
     dp.include_router(media_router)
-    logger.info("bot startup | routers=rstory,private,business,media")
+    logger.info(
+        "bot startup | routers=rstory,%sprivate,business,media",
+        "admin_agent," if ADMIN_AGENT_ENABLED else "",
+    )
 
     # 每天一个笑话：内部定时任务。不阻塞 polling；shutdown 时 await stop()。
     # config 里 DAILY_JOKE_ENABLED=False 时 start() 直接 noop。

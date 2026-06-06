@@ -560,3 +560,33 @@ else:
 # 监听地址/端口（容器内监听 0.0.0.0；公网由反代/隧道转发到 OXAPAY_CALLBACK_BASE_URL）。
 OXAPAY_WEBHOOK_HOST = _env_str("OXAPAY_WEBHOOK_HOST", "0.0.0.0") or "0.0.0.0"  # nosec B104
 OXAPAY_WEBHOOK_PORT = _env_int("OXAPAY_WEBHOOK_PORT", 8080, min_value=1)
+
+
+# ===== 管理员对话网关（owner-only）：主脑（OpenAI）+ GitHub 助手 =====
+# 仅 owner 在“私信”窗口可用。普通用户 / Business / 贝贝 / 媒体路由完全不触发。
+# 默认关闭（ADMIN_AGENT_ENABLED 不设或为 false）；关闭时整套网关静默 noop，不影响既有行为。
+_ADMIN_AGENT_ENABLED_RAW = _env_str("ADMIN_AGENT_ENABLED", "false").lower()
+ADMIN_AGENT_ENABLED = _ADMIN_AGENT_ENABLED_RAW in {"1", "true", "yes", "on"}
+
+# GitHub 助手聚焦的仓库（owner/repo）。默认本项目仓库。
+GITHUB_REPO = _env_str("GITHUB_REPO", "hjun3959-blip/telegram-ai-bot") or "hjun3959-blip/telegram-ai-bot"
+
+# GitHub 只读 REST API token（可选）。未配置时 GitHub 助手仍可对话/解释，
+# 但实际拉取仓库状态会受 GitHub 未认证速率限制（60 req/h/IP）影响，私有仓库会拿不到数据。
+GITHUB_TOKEN = _env_str("GITHUB_TOKEN", "")
+
+# GitHub REST API 基址（GitHub Enterprise 可覆盖）。
+GITHUB_API_BASE = _env_str("GITHUB_API_BASE", "https://api.github.com") or "https://api.github.com"
+
+# 管理员主脑（OpenAI）专用系统提示。与普通私聊 PRIVATE_SYSTEM_PROMPT 完全隔离：
+# 这里要求纯自然语言（不强制 JSON），定位是 owner 的技术副驾，可推理/规划/写代码片段。
+ADMIN_BRAIN_SYSTEM_PROMPT = _env_str("ADMIN_BRAIN_SYSTEM_PROMPT", "") or (
+    "你是阿君的专属管理副驾“主脑”，只在 owner 的私人控制台里对话。\n"
+    "定位：帮 owner 推理、规划、排错、写代码与命令片段、梳理这个 Telegram 机器人项目的工程决策。\n"
+    "规则：\n"
+    "- 用 owner 当前消息的主要语言回复（中文为主）。\n"
+    "- 直接、专业、可执行；需要时给具体步骤、代码或命令，不绕弯、不说空话。\n"
+    "- 不确定就说不确定，并给出验证方法；不要编造仓库里不存在的接口或文件。\n"
+    "- 你只是顾问：不会真的执行部署 / 改配置 / 推代码，这些只能由 owner 自己动手。\n"
+    "- 不要自称受限的 AI 客服，不要输出 JSON，正常自然语言即可。"
+)
