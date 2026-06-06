@@ -220,6 +220,56 @@ General guidance:
 5. Run `app.py` under a process manager (systemd / supervisor / pm2) so it
    restarts on failure.
 
+### Manual deploy via GitHub Actions
+
+`.github/workflows/deploy.yml` (workflow name **Manual Deploy**) deploys the
+current `master` to the production server over SSH. It is **manually triggered
+only** — there is no automatic deploy on push.
+
+**How to run it:**
+
+1. Go to the repo's **Actions** tab → **Manual Deploy** workflow.
+2. Click **Run workflow**, select the `master` branch.
+3. In the **confirm** input, type `deploy` (a guard against accidental runs).
+4. Click **Run workflow**.
+
+**Required repository secrets** (Settings → Secrets and variables → Actions):
+
+| Secret                | Purpose                                                   |
+| --------------------- | --------------------------------------------------------- |
+| `DEPLOY_SSH_HOST`     | Production server hostname / IP.                          |
+| `DEPLOY_SSH_PORT`     | SSH port.                                                 |
+| `DEPLOY_SSH_USER`     | SSH user.                                                 |
+| `DEPLOY_SSH_KEY`      | Private SSH key (PEM) for that user.                      |
+| `DEPLOY_APP_PATH`     | Absolute path of the deployed git checkout on the server. |
+| `DEPLOY_SERVICE_NAME` | systemd service name to restart.                          |
+
+**What the remote script does** (in order), on the server only:
+
+1. Verifies `DEPLOY_APP_PATH` exists and is a git checkout.
+2. Backs up the current `.env` to `/tmp`.
+3. `git fetch origin master`, then `git reset --hard origin/master`.
+4. Restores `.env` from the backup.
+5. Fixes ownership of the checkout (best effort; skipped without privileges).
+6. Runs `python3 -m compileall -q .` (syntax check).
+7. Installs `requirements.txt` if present (prefers `.venv/bin/pip`).
+8. Restarts the systemd service and prints its status + recent `journalctl`
+   logs.
+
+**Safety notes:**
+
+- The workflow does **not** change bot business logic; it only fast-forwards
+  the server's existing checkout to `origin/master`.
+- Secrets are passed via the environment / positional args and are **never**
+  echoed. Host path and service name are passed as arguments, not baked into
+  the remote script body.
+- Strict host key verification is used: the server's key is pinned with
+  `ssh-keyscan` before connecting (`StrictHostKeyChecking=yes`).
+- `git reset --hard origin/master` **discards any uncommitted changes** in the
+  server checkout (other than `.env`, which is preserved). Do not edit files
+  directly on the server.
+- A `concurrency` group prevents two production deploys from running at once.
+
 ---
 
 ## 11. Code graph artifacts
