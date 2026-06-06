@@ -568,6 +568,19 @@ OXAPAY_WEBHOOK_PORT = _env_int("OXAPAY_WEBHOOK_PORT", 8080, min_value=1)
 _ADMIN_AGENT_ENABLED_RAW = _env_str("ADMIN_AGENT_ENABLED", "false").lower()
 ADMIN_AGENT_ENABLED = _ADMIN_AGENT_ENABLED_RAW in {"1", "true", "yes", "on"}
 
+# ===== Owner 私聊功能按钮菜单（owner-only 控制台 UI）=====
+# 把 owner 私聊里常用功能做成 Telegram inline 按钮：/菜单、/功能 弹出；owner 私聊 /start 也提供入口。
+# 仅 owner + 私聊触发；普通用户 / Business / 群 / 贝贝(小胖) / 媒体路由完全不触发。
+# 未显式配置时默认跟随 ADMIN_AGENT_ENABLED（主脑/GitHub 入口本就依赖它）；
+# 也可单独用 OWNER_MENU_ENABLED 覆盖。关闭时整套菜单静默 noop，不影响既有行为。
+_OWNER_MENU_ENABLED_RAW = _env_str("OWNER_MENU_ENABLED", "").lower()
+if _OWNER_MENU_ENABLED_RAW in {"1", "true", "yes", "on"}:
+    OWNER_MENU_ENABLED = True
+elif _OWNER_MENU_ENABLED_RAW in {"0", "false", "no", "off"}:
+    OWNER_MENU_ENABLED = False
+else:
+    OWNER_MENU_ENABLED = ADMIN_AGENT_ENABLED
+
 # GitHub 助手聚焦的仓库（owner/repo）。默认本项目仓库。
 GITHUB_REPO = _env_str("GITHUB_REPO", "hjun3959-blip/telegram-ai-bot") or "hjun3959-blip/telegram-ai-bot"
 
