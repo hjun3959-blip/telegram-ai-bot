@@ -3,7 +3,7 @@
 把 owner 平时要敲命令才能用的功能，做成 Telegram inline 按钮，集中在「私信控制台」里：
 - /菜单、/功能 弹出主菜单；owner 私聊里发 /start 也会在欢迎语下方带一个「打开控制台」入口。
 - 主菜单按钮覆盖：主脑(OpenAI) / GitHub 助手 / 好玩一下(娱乐&图像&文本工具) /
-  文案优化 / 计划 / 今日焦点 / 健康检查 / 帮助。
+  文案优化 / 计划 / 今日焦点 / 健康检查 / 八字命理 / 帮助。
 - 图像/视频/娱乐/文本类功能不在这里重复实现，而是直接复用 private 路由里已有的
   「好玩一下」首页（home:* / play:* / stylepick:* 回调），避免两套键盘逻辑漂移。
 
@@ -14,6 +14,7 @@
 - ownmenu:plans   → 直接列出计划（plan_service）。
 - ownmenu:today   → 直接返回今日焦点。
 - ownmenu:health  → 直接返回 owner 健康检查。
+- ownmenu:bazi    → 触发 /八字 命令，进入八字命理推算对话。
 - ownmenu:help    → 控制台用法说明。
 - ownmenu:home    → 回主菜单。
 - 「好玩一下」相关入口用 home:make_image / home:fun / home:tools 回调，落到 private 路由处理。
@@ -32,6 +33,7 @@ from __future__ import annotations
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -60,6 +62,7 @@ _MENU_HELP = (
     "- 好玩一下：打开娱乐/出图/改图/图生视频/文本工具的按钮菜单。\n"
     "- 文案优化：点完直接把文案（也可带贴纸/GIF）发来即可。\n"
     "- 计划 / 今日焦点 / 健康检查：点一下直接出结果。\n"
+    "- 八字命理：点一下进入八字推算对话，逐步输入出生信息即可。\n"
     "随时发 /菜单 或 /功能 重新打开控制台。"
 )
 
@@ -124,6 +127,9 @@ def _build_menu_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="🩺 健康检查", callback_data="ownmenu:health"),
             ],
             [
+                InlineKeyboardButton(text="🔮 八字命理", callback_data="ownmenu:bazi"),
+            ],
+            [
                 InlineKeyboardButton(text="❓ 用法", callback_data="ownmenu:help"),
             ],
         ]
@@ -158,7 +164,7 @@ async def owner_start(message: Message):
 
 
 @router.callback_query(F.data.startswith("ownmenu:"))
-async def owner_menu_callback(query: CallbackQuery, bot: Bot):
+async def owner_menu_callback(query: CallbackQuery, bot: Bot, state: FSMContext):
     if not _owner_private_cb(query):
         # 非 owner 点到（理论上不会，菜单只发给 owner）：静默 ack，不泄露功能。
         try:
@@ -177,7 +183,6 @@ async def owner_menu_callback(query: CallbackQuery, bot: Bot):
             pass
         return
     chat_id = msg.chat.id
-    owner_key = query.from_user.id if query.from_user else chat_id
 
     try:
         await query.answer()
@@ -250,6 +255,20 @@ async def owner_menu_callback(query: CallbackQuery, bot: Bot):
             logger.warning("owner_menu health failed | err=%s", e)
             reply = "🩺 健康检查暂时生成失败，请看后台日志。"
         await send_long_text(bot, chat_id, reply or "🩺 健康检查无返回。")
+        return
+
+    if key == "bazi":
+        # 直接触发八字命理 FSM：清空当前状态，发送入口欢迎消息并设置 FSM 状态。
+        from aiogram.fsm.state import State
+        from routers.mingli import BaziStates, _gender_kb
+        await state.clear()
+        await state.set_state(BaziStates.ask_gender)
+        await bot.send_message(
+            chat_id,
+            "🔮 *八字命理解读*\n\n请先告诉我你的性别：",
+            parse_mode="Markdown",
+            reply_markup=_gender_kb(),
+        )
         return
 
     # 未知 ownmenu:* 键：给个回主菜单的兜底。
