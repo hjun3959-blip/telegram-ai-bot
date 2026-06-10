@@ -1,1 +1,137 @@
-aW1wb3J0IGFzeW5jaW8KZnJvbSB0eXBpbmcgaW1wb3J0IE9wdGlvbmFsCgpmcm9tIGFpb2dyYW0gaW1wb3J0IEJvdCwgRGlzcGF0Y2hlcgpmcm9tIGFpb2dyYW0udHlwZXMgaW1wb3J0IEJ1c2luZXNzQ29ubmVjdGlvbgoKZnJvbSBjb25maWcgaW1wb3J0ICgKICAgIEFETUlOX0FHRU5UX0VOQUJMRUQsCiAgICBPV05FUl9NRU5VX0VOQUJMRUQsCiAgICBPWEFQQVlfV0VCSE9PS19FTkFCTEVELAogICAgVEVMRUdSQU1fVE9LRU4sCikKZnJvbSBkYi5jb3JlIGltcG9ydCBjbG9zZV9kYiwgaW5pdF9kYgpmcm9tIHJvdXRlcnMuYWRtaW5fYWdlbnQgaW1wb3J0IHJvdXRlciBhcyBhZG1pbl9hZ2VudF9yb3V0ZXIKZW1yb3V0ZXJzLmJ1c2luZXNzIGltcG9ydCByb3V0ZXIgYXMgYnVzaW5lc3Nfcm91dGVyCmZyb20gcm91dGVycy5tZWRpYSBpbXBvcnQgcm91dGVyIGFzIG1lZGlhX3JvdXRlcgpmcm9tIHJvdXRlcnMub3duZXJfbWVudSBpbXBvcnQgcm91dGVyIGFzIG93bmVyX21lbnVfcm91dGVyCmZyb20gcm91dGVycy5wcml2YXRlIGltcG9ydCByb3V0ZXIgYXMgcHJpdmF0ZV9yb3V0ZXIKZW1yb3V0ZXJzLnJzdG9yeSBpbXBvcnQgcm91dGVyIGFzIHJzdG9yeV9yb3V0ZXIKZW1zZXJ2aWNlcy5jb250ZXh0X3NlcnZpY2UgaW1wb3J0IHJlZ2lzdGVyX2J1c2luZXNzX2Nvbm5lY3Rpb24KZnJvbSBzZXJ2aWNlcy5kYWlseV9qb2tlX3NjaGVkdWxlciBpbXBvcnQgRGFpbHlKb2tlU2NoZWR1bGVyCmZyb20gc2VydmljZXMucnN0b3J5X3N0b3JlIGltcG9ydCBjbG9zZV9zdG9yZSBhcyBjbG9zZV9yc3Rvcnlfc3RvcmUKZnJvbSBzZXJ2aWNlcy5yc3Rvcnlfc3RvcmUgaW1wb3J0IGluaXRfc3RvcmUgYXMgaW5pdF9yc3Rvcnlfc3RvcmUKZnJvbSBzZXJ2aWNlcy5yc3Rvcnlfd2ViaG9vayBpbXBvcnQgc3RhcnRfd2ViaG9va19zZXJ2ZXIsIHN0b3Bfd2ViaG9va19zZXJ2ZXIKZW11dGlscy5sb2dnZXIgaW1wb3J0IHNldHVwX2xvZ2dpbmcKCmxvZ2dlciA9IHNldHVwX2xvZ2dpbmcoKQoKCmFzeW5jIGRlZiBfb25fYnVzaW5lc3NfY29ubmVjdGlvbihjb25uZWN0aW9uOiBCdXNpbmVzc0Nvbm5lY3Rpb24pIC0+IE5vbmU6CiAgICAiIiJIYW5kbGUgQnVzaW5lc3NDb25uZWN0aW9uIHVwZGF0ZXMgYW5kIHJlZ2lzdGVyIHRoZSBjb25uZWN0aW9uLiIiIgogICAgdHJ5OgogICAgICAgIGF3YWl0IHJlZ2lzdGVyX2J1c2luZXNzX2Nvbm5lY3Rpb24oY29ubmVjdGlvbikKICAgIGV4Y2VwdCBFeGNlcHRpb24gYXMgZToKICAgICAgICBjb25uX2lkID0gZ2V0YXR0cihjb25uZWN0aW9uLCAiaWQiLCBOb25lKQogICAgICAgIGxvZ2dlci5leGNlcHRpb24oCiAgICAgICAgICAgICJyZWdpc3Rlcl9idXNpbmVzc19jb25uZWN0aW9uIGZhaWxlZCB8IGNvbm5lY3Rpb25faWQ9JXMgfCBlcnI9JXMiLAogICAgICAgICAgICBjb25uX2lkLAogICAgICAgICAgICBlLAogICAgICAgICkKCgphc3luYyBkZWYgX3NodXRkb3duKAogICAgYm90OiBPcHRpb25hbFtCb3RdLAogICAgd2ViaG9va19ydW5uZXI6IE9wdGlvbmFsW29iamVjdF0sCiAgICBkYl9pbml0ZWQ6IGJvb2wsCiAgICByc3RvcnlfaW5pdGVkOiBib29sLAopIC0+IE5vbmU6CiAgICAiIiJVbmlmaWVkIHJlc291cmNlIGNsZWFudXAgdG8gYXZvaWQgcmVwZXRpdGlvbiBhY3Jvc3MgZXJyb3Ivbm9ybWFsIHBhdGhzLiIiIgogICAgY2xlYW51cF90YXNrcyA9IFsKICAgICAgICAoc3RvcF93ZWJob29rX3NlcnZlcih3ZWJob29rX3J1bm5lciksICJ3ZWJob29rIiksCiAgICBdCiAgICBpZiBkYl9pbml0ZWQ6CiAgICAgICAgY2xlYW51cF90YXNrcy5hcHBlbmQoKGNsb3NlX2RiKCksICJkYiIpKQogICAgaWYgcnN0b3J5X2luaXRlZDoKICAgICAgICBjbGVhbnVwX3Rhc2tzLmFwcGVuZCgoY2xvc2VfcnN0b3J5X3N0b3JlKCksICJyc3RvcnkiKSkKICAgIGlmIGJvdCBpcyBub3QgTm9uZToKICAgICAgICBjbGVhbnVwX3Rhc2tzLmFwcGVuZCgoYm90LmNsb3NlKCksICJib3QiKSkKCiAgICBmb3IgY29ybywgbmFtZSBpbiBjbGVhbnVwX3Rhc2tzOgogICAgICAgIHRyeToKICAgICAgICAgICAgYXdhaXQgY29ybwogICAgICAgIGV4Y2VwdCBFeGNlcHRpb24gYXMgZToKICAgICAgICAgICAgbG9nZ2VyLndhcm5pbmcoIiVzIGNsZWFudXAgZmFpbGVkIHwgZXJyPSVzIiwgbmFtZSwgZSkKCgphc3luYyBkZWYgbWFpbigpIC0+IE5vbmU6CiAgICBpZiBub3QgVEVMRUdSQU1fVE9LRU46CiAgICAgICAgcmFpc2UgUnVudGltZUVycm9yKCLnvJblsaAgVEVMRUdSQU1fVE9LRU4g546v5aKD5Y+j6YeM6K+V5YiX5Y2HIikKCiAgICBib3Q6IE9wdGlvbmFsW0JvdF0gPSBOb25lCiAgICB3ZWJob29rX3J1bm5lciA9IE5vbmUKICAgIGRiX2luaXRlZCA9IEZhbHNlCiAgICByc3Rvcnlfaml0ZWQgPSBGYWxzZQogICAgZGFpbHlfam9rZV9zY2hlZHVsZXI6IE9wdGlvbmFsW0RhaWx5Sm9rZVNjaGVkdWxlcl0gPSBOb25lCgogICAgdHJ5OgogICAgICAgIGF3YWl0IGluaXRfZGIoKQogICAgICAgIGRiX2luaXRlZCA9IFRydWUKCiAgICAgICAgYXdhaXQgaW5pdF9yc3Rvcnlfc3RvcmUoKQogICAgICAgIHJzdG9yeV9pbml0ZWQgPSBUcnVlCgogICAgICAgIGJvdCA9IEJvdCh0b2tlbj1URUxFR1JBTV9UT0tFTikKICAgICAgICBkcCA9IERpc3BhdGNoZXIoKQoKICAgICAgICBkcC5idXNpbmVzc19jb25uZWN0aW9uKCkoX29uX2J1c2luZXNzX2Nvbm5lY3Rpb24pCgogICAgICAgICMgcnN0b3J5IOWFiOS6huiBjSBwcml2YXRlIOazqOWOhuKApHByaXZhdGUg5pyJ IEYudGV4dCDlhpnluLggaGFuZGxlcuOAgeS8muWPlu掉IC9yc3RvcnnvvI0KICAgICAgICAjIHJzdG9yeSDoqLvor4YgQ29tbWFuZC9DYWxsYmFja1F1ZXJ5IOe+jumXtOi/h+aTjeWSjOaZgjliUuWFiOS6huS/oeWInuWPiuaXtuWQjuW6j+S7o+WMlueahOWRmOS7o+OAggoJICAgICAgICBkcC5pbmNsdWRlX3JvdXRlcihyc3Rvcnlfcm91dGVyKQoKICAgICAgICAjIOeuoeeQhuWFg+WvpuWvhua+iu572Q7t5Li76LGhIG93bmVyLW9ubHkgKyDnp5HogIUgb25seS4KICAgICAgICBpZiBBRE1JTl9BR0VOVF9FTkFCTEVEOgogICAgICAgICAgICBkcC5pbmNsdWRlX3JvdXRlcihhZG1pbl9hZ2VudF9yb3V0ZXIpCgogICAgICAgICMgT3duZXIg56eR6ICF5Yqg6IO95oyJ6ZKu5oyH5Y+lOiBvd25lci1vbmx5ICsg56eR6ICFIG9ubHkuCiAgICAgICAgaWYgT1dORVJfTUVOVV9FTkFCTEVEOgogICAgICAgICAgICBkcC5pbmNsdWRlX3JvdXRlcihvd25lcl9tZW51X3JvdXRlcikKCiAgICAgICAgZHAuaW5jbHVkZV9yb3V0ZXIocHJpdmF0ZV9yb3V0ZXIpCiAgICAgICAgZHAuaW5jbHVkZV9yb3V0ZXIoYnVzaW5lc3Nfcm91dGVyKQogICAgICAgIGRwLmluY2x1ZGVfcm91dGVyKG1lZGlhX3JvdXRlcikKCiAgICAgICAgbG9nZ2VyLmluZm8oCiAgICAgICAgICAgICJib3Qgc3RhcnR1cCB8IHJvdXRlcnM9cnN0b3J5LCVzJXNwcml2YXRlLGJ1c2luZXNzLG1lZGlhIiwKICAgICAgICAgICAgImFkbWluX2FnZW50LCIgaWYgQURNSU5fQUdFTlRfRU5BQkxFRCBlbHNlICIiLAogICAgICAgICAgICAib3duZXJfbWVudSwiIGlmIE9XTkVSX01FTlVfRU5BQkxFRCBlbHNlICIiLAogICAgICAgICkKCiAgICAgICAgIyDmr5TlpKnnmoTkuYvms5XkuIDkuKrlXK3oqYzku6PkuIrkuobmgqjlpb3plov5Li75LiN6Zi05YaFIHBvbGxpbmf3vI8KICAgICAgICBkYWlseV9qb2tlX3NjaGVkdWxlciA9IERhaWx5Sm9rZVNjaGVkdWxlcihib3QpCiAgICAgICAgZGFpbHlfam9rZV9zY2hlZHVsZXIuc3RhcnQoKQoKICAgICAgICAjIE94YVBheSDmlbDku6XgIFdlYmhvb2s6IHBvbGxpbmcg5rKo5py65pyJ546v5YiwIEhUVFAgc2VydmVy77yM5oyJ6ZKu6ZuG5bqP5LiA5Liq5pyA5pmn IGFpb2h0dHAgc2VydmVyLgogICAgICAgICMg5Lul5b2T IE9YQVBBWVVXRUJIT09LX0VOQUJMRUQ9RmFsc2Ug5pmC5L+uIHN0YXJ0KCkg55u06K6kIG5vb3DigKIKICAgICAgICBpZiBPWEFQQVlfV0VCSE9PS19FTkFCTEVEOgogICAgICAgICAgICB0cnk6CiAgICAgICAgICAgICAgICB3ZWJob29rX3J1bm5lciA9IGF3YWl0IHN0YXJ0X3dlYmhvb2tfc2VydmVyKCkKICAgICAgICAgICAgZXhjZXB0IEV4Y2VwdGlvbiBhcyBlOgogICAgICAgICAgICAgICAgIyBXZWJob29rIOWPluWFiOWQjuW+hiBQMSAtIOezu+e7n+WuouWFqOe+k+WOiiByYWlzZeW/heW/iOaJgOacieS4jOWQjuSXhQogICAgICAgICAgICAgICAgbG9nZ2VyLmV4Y2VwdGlvbigib3hhcGF5IHdlYmhvb2sgc2VydmVyIHN0YXJ0IGZhaWxlZCB8IGVycj0lcyIsIGUpCiAgICAgICAgICAgICAgICByYWlzZQoKICAgICAgICB0cnk6CiAgICAgICAgICAgIGF3YWl0IGRwLnN0YXJ0X3BvbGxpbmcoYm90LCBhbGxvd2VkX3VwZGF0ZXM9ZHAucmVzb2x2ZV91c2VkX3VwZGF0ZV90eXBlcygpKQogICAgICAgIGV4Y2VwdCBhc3luY2lvLkNhbmNlbGxlZEVycm9yOgogICAgICAgICAgICBsb2dnZXIuZGVidWcoInBvbGxpbmcgY2FuY2VsbGVkIikKICAgICAgICAgICAgcmFpc2UKICAgICAgICBleGNlcHQgRXhjZXB0aW9uIGFzIGU6CiAgICAgICAgICAgIGxvZ2dlci5leGNlcHRpb24oInBvbGxpbmcgZmFpbGVkIHwgZXJyPSVzIiwgZSkKICAgICAgICAgICAgcmFpc2UKICAgICAgICBmaW5hbGx5OgogICAgICAgICAgICBpZiBkYWlseV9qb2tlX3NjaGVkdWxlciBpcyBub3QgTm9uZToKICAgICAgICAgICAgICAgIHRyeToKICAgICAgICAgICAgICAgICAgICBhd2FpdCBkYWlseV9qb2tlX3NjaGVkdWxlci5zdG9wKCkKICAgICAgICAgICAgICAgIGV4Y2VwdCBFeGNlcHRpb24gYXMgZToKICAgICAgICAgICAgICAgICAgICBsb2dnZXIud2FybmluZygiZGFpbHlfam9rZV9zY2hlZHVsZXIgc3RvcCBmYWlsZWQgfCBlcnI9JXMiLCBlKQoKICAgIGZpbmFsbHk6CiAgICAgICAgYXdhaXQgX3NodXRkb3duKGJvdCwgd2ViaG9va19ydW5uZXIsIGRiX2luaXRlZCwgcnN0b3J5X2luaXRlZCkKCgppZiBfX25hbWVfXyA9PSAiX19tYWluX18iOgogICAgYXN5bmNpby5ydW4obWFpbigpKQo=
+import asyncio
+from typing import Optional
+
+from aiogram import Bot, Dispatcher
+from aiogram.types import BusinessConnection
+
+from config import (
+    ADMIN_AGENT_ENABLED,
+    OWNER_MENU_ENABLED,
+    OXAPAY_WEBHOOK_ENABLED,
+    TELEGRAM_TOKEN,
+)
+from db.core import close_db, init_db
+from routers.admin_agent import router as admin_agent_router
+from routers.business import router as business_router
+from routers.media import router as media_router
+from routers.owner_menu import router as owner_menu_router
+from routers.private import router as private_router
+from routers.rstory import router as rstory_router
+from services.context_service import register_business_connection
+from services.daily_joke_scheduler import DailyJokeScheduler
+from services.rstory_store import close_store as close_rstory_store
+from services.rstory_store import init_store as init_rstory_store
+from services.rstory_webhook import start_webhook_server, stop_webhook_server
+from utils.logger import setup_logging
+
+logger = setup_logging()
+
+
+async def _on_business_connection(connection: BusinessConnection) -> None:
+    """Handle BusinessConnection updates and register the connection."""
+    try:
+        await register_business_connection(connection)
+    except Exception as e:
+        conn_id = getattr(connection, "id", None)
+        logger.exception(
+            "register_business_connection failed | connection_id=%s | err=%s",
+            conn_id,
+            e,
+        )
+
+
+async def _shutdown(
+    bot: Optional[Bot],
+    webhook_runner: Optional[object],
+    db_inited: bool,
+    rstory_inited: bool,
+) -> None:
+    """Unified resource cleanup to avoid repetition across error/normal paths."""
+    cleanup_tasks = [
+        (stop_webhook_server(webhook_runner), "webhook"),
+    ]
+    if db_inited:
+        cleanup_tasks.append((close_db(), "db"))
+    if rstory_inited:
+        cleanup_tasks.append((close_rstory_store(), "rstory"))
+    if bot is not None:
+        cleanup_tasks.append((bot.close(), "bot"))
+
+    for coro, name in cleanup_tasks:
+        try:
+            await coro
+        except Exception as e:
+            logger.warning("%s cleanup failed | err=%s", name, e)
+
+
+async def main() -> None:
+    if not TELEGRAM_TOKEN:
+        raise RuntimeError("缺少 TELEGRAM_TOKEN 环境变量，无法启动")
+
+    bot: Optional[Bot] = None
+    webhook_runner = None
+    db_inited = False
+    rstory_inited = False
+    daily_joke_scheduler: Optional[DailyJokeScheduler] = None
+
+    try:
+        await init_db()
+        db_inited = True
+
+        await init_rstory_store()
+        rstory_inited = True
+
+        bot = Bot(token=TELEGRAM_TOKEN)
+        dp = Dispatcher()
+
+        dp.business_connection()(_on_business_connection)
+
+        dp.include_router(rstory_router)
+
+        if ADMIN_AGENT_ENABLED:
+            dp.include_router(admin_agent_router)
+
+        if OWNER_MENU_ENABLED:
+            dp.include_router(owner_menu_router)
+
+        dp.include_router(private_router)
+        dp.include_router(business_router)
+        dp.include_router(media_router)
+
+        logger.info(
+            "bot startup | routers=rstory,%s%sprivate,business,media",
+            "admin_agent," if ADMIN_AGENT_ENABLED else "",
+            "owner_menu," if OWNER_MENU_ENABLED else "",
+        )
+
+        daily_joke_scheduler = DailyJokeScheduler(bot)
+        daily_joke_scheduler.start()
+
+        if OXAPAY_WEBHOOK_ENABLED:
+            try:
+                webhook_runner = await start_webhook_server()
+            except Exception as e:
+                logger.exception("oxapay webhook server start failed | err=%s", e)
+                raise
+
+        try:
+            await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+        except asyncio.CancelledError:
+            logger.debug("polling cancelled")
+            raise
+        except Exception as e:
+            logger.exception("polling failed | err=%s", e)
+            raise
+        finally:
+            if daily_joke_scheduler is not None:
+                try:
+                    await daily_joke_scheduler.stop()
+                except Exception as e:
+                    logger.warning("daily_joke_scheduler stop failed | err=%s", e)
+
+    finally:
+        await _shutdown(bot, webhook_runner, db_inited, rstory_inited)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
