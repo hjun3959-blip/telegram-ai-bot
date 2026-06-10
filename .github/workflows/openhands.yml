@@ -1,0 +1,46 @@
+# OpenHands AI Agent Workflow
+# Triggers when an Issue or PR is labeled with 'fix-me'
+# OpenHands will read the issue, write code, and open a PR automatically.
+#
+# Required repository secret:
+#   LLM_API_KEY - your OpenAI API key (reuse OPENAI_API_KEY value)
+#
+# Usage:
+#   1. Create an Issue describing the bug or feature
+#   2. Add the 'fix-me' label
+#   3. OpenHands will analyze and open a PR within minutes
+
+name: OpenHands AI Agent
+
+on:
+  issues:
+    types: [labeled]
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  openhands:
+    name: OpenHands Agent
+    if: github.event.label.name == 'fix-me'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run OpenHands Agent
+        uses: All-Hands-AI/OpenHands@main
+        with:
+          task: |
+            Please analyze the issue/PR and implement a fix.
+            Focus on:
+            - Understanding the root cause
+            - Writing clean, minimal code changes
+            - Following existing code style (Python async, aiogram)
+            - Adding appropriate error handling
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          llm_model: gpt-4.1
+          llm_api_key: ${{ secrets.LLM_API_KEY }}
+          llm_base_url: https://yungpt.com/v1
+          max_iterations: 25
