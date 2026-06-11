@@ -1,7 +1,7 @@
 name: Manual Deploy
 
 # Manually-triggered production deployment.
-# Deploys the current `master` to the production server over SSH.
+# Deploys the current `main` to the production server over SSH.
 #
 # Required repository secrets (already configured):
 #   DEPLOY_SSH_HOST      - production server hostname / IP
@@ -12,7 +12,7 @@ name: Manual Deploy
 #   DEPLOY_SERVICE_NAME  - systemd service name to restart
 #
 # This workflow never checks out or modifies bot business logic; it only
-# instructs the server to fast-forward its existing checkout to origin/master.
+# instructs the server to fast-forward its existing checkout to origin/main.
 
 on:
   workflow_dispatch:
@@ -31,7 +31,7 @@ concurrency:
 
 jobs:
   deploy:
-    name: Deploy master to production
+    name: Deploy main to production
     runs-on: ubuntu-latest
 
     steps:
@@ -54,7 +54,6 @@ jobs:
           missing=0
           for name in DEPLOY_SSH_HOST DEPLOY_SSH_PORT DEPLOY_SSH_USER \
                       DEPLOY_SSH_KEY DEPLOY_APP_PATH DEPLOY_SERVICE_NAME; do
-            # shellcheck disable=SC2086
             if [ -z "${!name}" ]; then
               echo "::error::Required secret ${name} is not set."
               missing=1
@@ -73,12 +72,9 @@ jobs:
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
 
-          # Private key -> file with strict perms (never echoed).
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
 
-          # Strict host key handling: pin the server's key via ssh-keyscan
-          # instead of disabling verification.
           : > ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
           if ! ssh-keyscan -p "$DEPLOY_SSH_PORT" -H "$DEPLOY_SSH_HOST" \
@@ -101,8 +97,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          # The remote script. App path and service name are passed as
-          # positional args so the script body contains no secrets.
           remote_script='
             set -euo pipefail
             APP_PATH="$1"
@@ -129,11 +123,11 @@ jobs:
               echo "    No .env found; nothing to back up."
             fi
 
-            echo "==> Fetching origin master"
-            git fetch --prune origin master
+            echo "==> Fetching origin main"
+            git fetch --prune origin main
 
-            echo "==> Resetting hard to origin/master"
-            git reset --hard origin/master
+            echo "==> Resetting hard to origin/main"
+            git reset --hard origin/main
 
             echo "==> Restoring .env"
             if [ -f "${BACKUP_ENV}" ]; then
