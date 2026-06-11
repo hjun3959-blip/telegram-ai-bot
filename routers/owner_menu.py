@@ -3,7 +3,7 @@
 把 owner 平时要敲命令才能用的功能，做成 Telegram inline 按钮，集中在「私信控制台」里：
 - /菜单、/功能 弹出主菜单；owner 私聊里发 /start 也会在欢迎语下方带一个「打开控制台」入口。
 - 主菜单按钮覆盖：主脑(OpenAI) / GitHub 助手 / 好玩一下(娱乐&图像&文本工具) /
-  文案优化 / 计划 / 今日焦点 / 健康检查 / 帮助。
+  文案优化 / 计划 / 今日焦点 / 神算子 / 八字命理 / 帮助。
 - 图像/视频/娱乐/文本类功能不在这里重复实现，而是直接复用 private 路由里已有的
   「好玩一下」首页（home:* / play:* / stylepick:* 回调），避免两套键盘逻辑漂移。
 
@@ -13,7 +13,8 @@
 - ownmenu:copyfix → 登记 copyfix pending，提示 owner 直接把文案/贴纸/GIF 发来即可优化。
 - ownmenu:plans   → 直接列出计划（plan_service）。
 - ownmenu:today   → 直接返回今日焦点。
-- ownmenu:health  → 直接返回 owner 健康检查。
+- ownmenu:health  → 神算子（原健康检查）直接返回状态报告。
+- ownmenu:bazi    → 触发 /八字 命令，进入八字命理推算对话。
 - ownmenu:help    → 控制台用法说明。
 - ownmenu:home    → 回主菜单。
 - 「好玩一下」相关入口用 home:make_image / home:fun / home:tools 回调，落到 private 路由处理。
@@ -32,6 +33,7 @@ from __future__ import annotations
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -59,7 +61,8 @@ _MENU_HELP = (
     "- GitHub：进入会话后，直接发消息就是问 GitHub 助手（只读优先，写操作要你本人确认）。\n"
     "- 好玩一下：打开娱乐/出图/改图/图生视频/文本工具的按钮菜单。\n"
     "- 文案优化：点完直接把文案（也可带贴纸/GIF）发来即可。\n"
-    "- 计划 / 今日焦点 / 健康检查：点一下直接出结果。\n"
+    "- 计划 / 今日焦点 / 神算子：点一下直接出结果。\n"
+    "- 八字命理：点一下进入八字推算对话，逐步输入出生信息即可。\n"
     "随时发 /菜单 或 /功能 重新打开控制台。"
 )
 
@@ -74,12 +77,6 @@ def _owner_private_msg(message: Message) -> bool:
 
 
 def _owner_private_cb(query: CallbackQuery) -> bool:
-    """回调门禁：复用消息门禁逻辑，外加 from_user 必须是 owner。
-
-    CallbackQuery.message 是 bot 自己发的菜单消息，其 from_user 是 bot；
-    真正点按钮的人在 query.from_user。所以这里基于 query.from_user 单独判定 owner，
-    chat 类型仍按 message.chat 判（必须 private）。
-    """
     if not OWNER_MENU_ENABLED:
         return False
     msg = query.message
@@ -88,20 +85,16 @@ def _owner_private_cb(query: CallbackQuery) -> bool:
     user = query.from_user
     if not user:
         return False
-    # 复用 is_owner：构造一个最小 message-like，让它读 from_user。
     return is_owner(_OwnerProbe(user))
 
 
 class _OwnerProbe:
-    """给 is_owner 用的最小载体：只暴露 from_user / chat。"""
-
     def __init__(self, user):
         self.from_user = user
         self.chat = None
 
 
 def _build_menu_keyboard() -> InlineKeyboardMarkup:
-    """主菜单键盘。owner 专属功能用 ownmenu:* 回调；娱乐/出图复用 private 的 home:* 回调。"""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -121,7 +114,10 @@ def _build_menu_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(text="🎯 今日焦点", callback_data="ownmenu:today"),
-                InlineKeyboardButton(text="🩺 健康检查", callback_data="ownmenu:health"),
+                InlineKeyboardButton(text="🔮 神算子", callback_data="ownmenu:health"),
+            ],
+            [
+                InlineKeyboardButton(text="🎴 八字命理", callback_data="ownmenu:bazi"),
             ],
             [
                 InlineKeyboardButton(text="❓ 用法", callback_data="ownmenu:help"),
@@ -131,7 +127,6 @@ def _build_menu_keyboard() -> InlineKeyboardMarkup:
 
 
 def _build_home_button() -> InlineKeyboardMarkup:
-    """单按钮：回主菜单。"""
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="⬅️ 回控制台", callback_data="ownmenu:home")]]
     )
@@ -149,18 +144,12 @@ async def cmd_menu(message: Message):
 
 @router.message(CommandStart(), _owner_private_msg)
 async def owner_start(message: Message):
-    """owner 私聊 /start：在欢迎语下方直接弹控制台。
-
-    门禁作为 handler 过滤器（而非函数内 early-return）：非 owner / 非私聊 / 关闭时本 handler
-    不匹配，/start 事件继续传给 private_router 的 start_handler，保持既有安全行为不被吞掉。
-    """
     await _send_menu(message, greeting="你好阿君～这是你的私信控制台。")
 
 
 @router.callback_query(F.data.startswith("ownmenu:"))
-async def owner_menu_callback(query: CallbackQuery, bot: Bot):
+async def owner_menu_callback(query: CallbackQuery, bot: Bot, state: FSMContext):
     if not _owner_private_cb(query):
-        # 非 owner 点到（理论上不会，菜单只发给 owner）：静默 ack，不泄露功能。
         try:
             await query.answer()
         except Exception:
@@ -177,7 +166,6 @@ async def owner_menu_callback(query: CallbackQuery, bot: Bot):
             pass
         return
     chat_id = msg.chat.id
-    owner_key = query.from_user.id if query.from_user else chat_id
 
     try:
         await query.answer()
@@ -193,7 +181,6 @@ async def owner_menu_callback(query: CallbackQuery, bot: Bot):
         return
 
     if key in {"brain", "github"}:
-        # 复用 admin_agent 的短会话机制：之后 owner 的普通文本由 admin_agent.session_text 接管。
         try:
             from routers import admin_agent
         except Exception:
@@ -203,10 +190,7 @@ async def owner_menu_callback(query: CallbackQuery, bot: Bot):
             return
         admin_agent._active_session[str(chat_id)] = "brain" if key == "brain" else "github"
         if key == "brain":
-            await send_long_text(
-                bot, chat_id,
-                "🧠 已进入主脑会话，直接发消息即可对话；发 /退出 结束。",
-            )
+            await send_long_text(bot, chat_id, "🧠 已进入主脑会话，直接发消息即可对话；发 /退出 结束。")
         else:
             await send_long_text(
                 bot, chat_id,
@@ -216,13 +200,9 @@ async def owner_menu_callback(query: CallbackQuery, bot: Bot):
         return
 
     if key == "copyfix":
-        # 登记 copyfix pending：owner 下一条文本会被 private 的 _maybe_consume_pending_for_text 当作待优化文案。
         if query.from_user:
             set_pending_style(query.from_user.id, "copyfix", "频道发布")
-        await send_long_text(
-            bot, chat_id,
-            "📝 文案优化已就绪：把要优化的频道/广告文案直接发我就行（emoji、贴纸、GIF 也会读进去）。",
-        )
+        await send_long_text(bot, chat_id, "📝 文案优化已就绪：把要优化的频道/广告文案直接发我就行（emoji、贴纸、GIF 也会读进去）。")
         return
 
     if key == "plans":
@@ -244,13 +224,25 @@ async def owner_menu_callback(query: CallbackQuery, bot: Bot):
         return
 
     if key == "health":
+        # 神算子：原健康检查功能，展示运行状态报告
         try:
             reply = await owner_health_command_reply("/健康检查")
         except Exception as e:
             logger.warning("owner_menu health failed | err=%s", e)
-            reply = "🩺 健康检查暂时生成失败，请看后台日志。"
-        await send_long_text(bot, chat_id, reply or "🩺 健康检查无返回。")
+            reply = "🔮 神算子暂时生成失败，请看后台日志。"
+        await send_long_text(bot, chat_id, reply or "🔮 神算子无返回。")
         return
 
-    # 未知 ownmenu:* 键：给个回主菜单的兜底。
+    if key == "bazi":
+        from routers.mingli import BaziStates, _gender_kb
+        await state.clear()
+        await state.set_state(BaziStates.ask_gender)
+        await bot.send_message(
+            chat_id,
+            "🔮 *八字命理解读*\n\n请先告诉我你的性别：",
+            parse_mode="Markdown",
+            reply_markup=_gender_kb(),
+        )
+        return
+
     await msg.answer("（控制台）未知操作。", reply_markup=_build_home_button())

@@ -14,6 +14,7 @@ from db.core import close_db, init_db
 from routers.admin_agent import router as admin_agent_router
 from routers.business import router as business_router
 from routers.media import router as media_router
+from routers.mingli import router as mingli_router
 from routers.owner_menu import router as owner_menu_router
 from routers.private import router as private_router
 from routers.rstory import router as rstory_router
@@ -86,6 +87,9 @@ async def main() -> None:
 
         dp.business_connection()(_on_business_connection)
 
+        # 命理路由优先于其他私信路由，避免 FSM 状态被拦截
+        dp.include_router(mingli_router)
+
         dp.include_router(rstory_router)
 
         if ADMIN_AGENT_ENABLED:
@@ -99,7 +103,7 @@ async def main() -> None:
         dp.include_router(media_router)
 
         logger.info(
-            "bot startup | routers=rstory,%s%sprivate,business,media",
+            "bot startup | routers=mingli,rstory,%s%sprivate,business,media",
             "admin_agent," if ADMIN_AGENT_ENABLED else "",
             "owner_menu," if OWNER_MENU_ENABLED else "",
         )
