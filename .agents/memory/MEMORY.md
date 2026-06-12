@@ -1,0 +1,1 @@
+- [Bazi 八字排盘](bazi-calculation.md) — 必须用节气/立春感知引擎(lunar_python)，且 lunar_python 对非法公历日期静默不报错，需 datetime.date 预校验

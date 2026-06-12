@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -70,7 +71,9 @@ async def cb_gender(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(BaziStates.ask_year)
     label = "♂ 男" if gender == "男" else "♀ 女"
     await callback.message.edit_text(
-        f"已选择性别：{label}\n\n📅 请输入出生*年份*（如：1990）：",
+        f"已选择性别：{label}\n\n"
+        "📅 请输入出生*年份*（公历/阳历，如：1990）：\n"
+        "_注：八字按公历 + 节气排盘，请勿输入农历日期_",
         parse_mode="Markdown",
     )
     await callback.answer()
@@ -107,7 +110,16 @@ async def ask_day(message: Message, state: FSMContext) -> None:
     if not re.fullmatch(r"\d{1,2}", text) or not (1 <= int(text) <= 31):
         await message.answer("⚠️ 请输入有效日期（1–31）")
         return
-    await state.update_data(day=int(text))
+    day = int(text)
+    data = await state.get_data()
+    try:
+        date(data["year"], data["month"], day)
+    except ValueError:
+        await message.answer(
+            f"⚠️ {data['year']}年{data['month']}月没有 {day} 日，请重新输入有效日期"
+        )
+        return
+    await state.update_data(day=day)
     await state.set_state(BaziStates.ask_hour)
     await message.answer(
         "请输入出生*小时*（0–23，24小时制）\n不确定时辰可输入 0（子时）",
@@ -123,10 +135,19 @@ async def ask_hour(message: Message, state: FSMContext) -> None:
         await message.answer("⚠️ 请输入有效小时（0–23）")
         return
     await state.update_data(hour=int(text))
-    await state.set_state(BaziStates.confirm)
-
     data = await state.get_data()
-    card = format_bazi_card(data["year"], data["month"], data["day"], data["hour"], data["gender"])
+
+    try:
+        card = format_bazi_card(
+            data["year"], data["month"], data["day"], data["hour"], data["gender"]
+        )
+    except ValueError:
+        # 理论上日期已在 ask_day 校验过，这里兜底，避免未捕获异常打断流程
+        await state.set_state(BaziStates.ask_day)
+        await message.answer("⚠️ 出生日期无效，请重新输入出生*日期*（1–31）：", parse_mode="Markdown")
+        return
+
+    await state.set_state(BaziStates.confirm)
     await message.answer(
         card + "\n\n以上信息是否正确？",
         parse_mode="Markdown",
