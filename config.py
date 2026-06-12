@@ -603,3 +603,16 @@ ADMIN_BRAIN_SYSTEM_PROMPT = _env_str("ADMIN_BRAIN_SYSTEM_PROMPT", "") or (
     "- 你只是顾问：不会真的执行部署 / 改配置 / 推代码，这些只能由 owner 自己动手。\n"
     "- 不要自称受限的 AI 客服，不要输出 JSON，正常自然语言即可。"
 )
+
+# 阿树「心学主脑」prompt 预设（xinxue / ATREE_XINXUE_PROMPT）：可选叠加。
+# - 默认关闭，避免改动 Business / 贝贝（beibei）等现网行为。
+# - 仅作用于 owner-only 的管理员主脑（ADMIN_BRAIN_SYSTEM_PROMPT），不进普通私聊 /
+#   Business。需要全局生效时由 owner 显式打开。
+# - 预设内容见 services/atree_xinxue_prompt.py；已做安全适配：强制不暴露思维链、
+#   不引入 NSFW/越狱、不改 token/上下文上限。
+_ATREE_XINXUE_PROMPT_ENABLED_RAW = _env_str("ATREE_XINXUE_PROMPT_ENABLED", "0").lower()
+ATREE_XINXUE_PROMPT_ENABLED = _ATREE_XINXUE_PROMPT_ENABLED_RAW in {"1", "true", "yes", "on"}
+if ATREE_XINXUE_PROMPT_ENABLED:
+    from services.atree_xinxue_prompt import ATREE_XINXUE_PROMPT
+
+    ADMIN_BRAIN_SYSTEM_PROMPT = ADMIN_BRAIN_SYSTEM_PROMPT + "\n\n" + ATREE_XINXUE_PROMPT
