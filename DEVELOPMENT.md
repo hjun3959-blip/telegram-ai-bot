@@ -60,8 +60,28 @@ full annotated list):
 | `BOT_DB_PATH`        | Path to the SQLite database file (default `bot_data.sqlite3`). |
 | `OWNER_USERNAMES` / `OWNER_CHAT_IDS` / `OWNER_USER_IDS` | Owner identity matching. |
 | `CORE_MODEL`, `LIGHT_MODEL`, `VISION_MODEL`, ... | Model routing (don't change casually). |
+| `ATREE_XINXUE_PROMPT_ENABLED` | Opt-in `xinxue` (心学) prompt preset, **owner-only admin brain** (default off). |
 
 > **Never commit secrets.** Keep all keys and tokens in `.env` only.
+
+### `xinxue` prompt preset (心学主脑)
+
+`ATREE_XINXUE_PROMPT_ENABLED=true` overlays a named prompt preset (心即理 / 致良知 /
+知行合一 / 事上格物 reasoning style) **only** onto the owner-only admin brain
+(`ADMIN_BRAIN_SYSTEM_PROMPT`, reached via `/主脑` `/openai` `/brain`). It does **not**
+touch ordinary private chat, Business, or 贝贝 replies. The preset text lives in
+`services/atree_xinxue_prompt.py` (`ATREE_XINXUE_PROMPT`).
+
+Safety adaptations baked into the preset (intentional differences from any raw
+preset JSON):
+
+- **No chain-of-thought exposure.** Internal reasoning is never printed; the preset
+  forbids "我先分析 / 让我想想 / 推理如下" style self-disclosure. Any `show_thoughts`
+  flag is ignored.
+- **No NSFW / jailbreak** content; disabled prompt slots are not included.
+- **Token / context limits are unchanged** — `max_tokens` stays at the existing safe
+  per-mode defaults in `services/openai_service.py`; oversized values like
+  `openai_max_tokens` / `openai_max_context` from any source JSON are ignored.
 
 For local checks and the smoke tests you do **not** need real credentials —
 dummy values are sufficient (the smoke tests are fully offline).
