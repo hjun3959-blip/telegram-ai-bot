@@ -7,6 +7,10 @@
 
 from __future__ import annotations
 
+from datetime import date
+
+from lunar_python import Solar
+
 from config import CORE_MODEL
 from services.openai_service import call_openai
 from utils.logger import setup_logging
@@ -14,13 +18,7 @@ from utils.logger import setup_logging
 logger = setup_logging()
 
 # ── 天干地支基础表 ──────────────────────────────────────────────────────────────
-_TIANGAN = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸"]
-_DIZHI   = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
-_SHICHEN = {
-    "子": (23, 1), "丑": (1, 3),  "寅": (3, 5),  "卯": (5, 7),
-    "辰": (7, 9),  "巳": (9, 11), "午": (11, 13), "未": (13, 15),
-    "申": (15, 17), "酉": (17, 19), "戌": (19, 21), "亥": (21, 23),
-}
+# 五行归属：四柱八个字（四天干 + 四地支）逐字统计。
 _WUXING = {
     "甲": "木", "乙": "木", "丙": "火", "丁": "火", "戊": "土",
     "己": "土", "庚": "金", "辛": "金", "壬": "水", "癸": "水",
@@ -28,57 +26,42 @@ _WUXING = {
     "巳": "火", "午": "火", "未": "土", "申": "金", "酉": "金",
     "戌": "土", "亥": "水",
 }
-_MONTH_ZHI = ["丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥", "子"]
+# 年柱地支 → 生肖，保证生肖始终与排盘的年支一致（以立春为界，非元旦/春节）。
+_ZHI_SHENGXIAO = {
+    "子": "鼠", "丑": "牛", "寅": "虎", "卯": "兔", "辰": "龙", "巳": "蛇",
+    "午": "马", "未": "羊", "申": "猴", "酉": "鸡", "戌": "狗", "亥": "猪",
+}
 
 
-def _gan(n: int) -> str:
-    return _TIANGAN[n % 10]
+def compute_bazi(year: int, month: int, day: int, hour: int, minute: int = 0) -> dict:
+    """四柱八字推算（公历输入）。
 
+    使用 lunar_python（寿星天文历同源算法）排盘，正确处理：
+    - 年柱以「立春」为界换年（非元旦、非农历正月初一）；
+    - 月柱以二十四节气的「节」为界换月（非公历月份切换）；
+    - 日柱按真实儒略日连续推算；
+    - 时柱含子时跨日规则。
 
-def _zhi(n: int) -> str:
-    return _DIZHI[n % 12]
+    入参为公历（阳历）年月日时；hour 为 0–23 的 24 小时制。
+    返回结构向后兼容旧版（pillars / wuxing / day_master / day_master_element），
+    另附 shengxiao（生肖）与 lunar_date（农历）便于展示。
 
+    非法公历日期（如 2 月 30 日、平年 2 月 29 日）会抛 ValueError；
+    lunar_python 本身不会对这类输入报错，会静默产出错盘，故在此显式校验。
+    """
+    date(year, month, day)  # 非法日期直接抛 ValueError，避免静默错盘
 
-def _hour_to_zhi(hour: int) -> str:
-    if hour == 23 or hour == 0:
-        return "子"
-    for zhi, (start, end) in _SHICHEN.items():
-        if start <= hour < end:
-            return zhi
-    return "子"
-
-
-def compute_bazi(year: int, month: int, day: int, hour: int) -> dict:
-    """简化四柱八字推算（天干地支 + 五行统计 + 日主）"""
-    year_base = year - 1864
-    year_gan = _gan(year_base)
-    year_zhi = _zhi(year_base)
-
-    year_gan_idx = _TIANGAN.index(year_gan)
-    month_zhi = _MONTH_ZHI[month - 1]
-    month_zhi_idx = _DIZHI.index(month_zhi)
-    month_gan_start = [2, 4, 6, 8, 0][year_gan_idx % 5]
-    offset = (month_zhi_idx - 2) % 12
-    month_gan = _gan(month_gan_start + offset)
-
-    a = (14 - month) // 12
-    y = year - a
-    m = month + 12 * a - 2
-    jd = day + (153 * m + 2) // 5 + 365 * y + y // 4 - y // 100 + y // 400 - 32045
-    day_gan = _gan(jd)
-    day_zhi = _zhi(jd + 2)
-
-    hour_zhi = _hour_to_zhi(hour)
-    hour_zhi_idx = _DIZHI.index(hour_zhi)
-    day_gan_idx = _TIANGAN.index(day_gan)
-    hour_gan_start = [0, 2, 4, 6, 8][day_gan_idx % 5]
-    hour_gan = _gan(hour_gan_start + hour_zhi_idx)
+    solar = Solar.fromYmdHms(year, month, day, hour, minute, 0)
+    lunar = solar.getLunar()
+    eight_char = lunar.getEightChar()
+    # 晚子时（23:00–24:00）日柱按「当天」计：约定明确，且不依赖库默认值跨版本漂移。
+    eight_char.setSect(2)
 
     pillars = {
-        "年柱": f"{year_gan}{year_zhi}",
-        "月柱": f"{month_gan}{month_zhi}",
-        "日柱": f"{day_gan}{day_zhi}",
-        "时柱": f"{hour_gan}{hour_zhi}",
+        "年柱": eight_char.getYear(),
+        "月柱": eight_char.getMonth(),
+        "日柱": eight_char.getDay(),
+        "时柱": eight_char.getTime(),
     }
 
     wuxing_count: dict[str, int] = {"木": 0, "火": 0, "土": 0, "金": 0, "水": 0}
@@ -88,11 +71,16 @@ def compute_bazi(year: int, month: int, day: int, hour: int) -> dict:
             if wx:
                 wuxing_count[wx] += 1
 
+    day_gan = eight_char.getDayGan()
+    year_zhi = eight_char.getYearZhi()
+
     return {
         "pillars": pillars,
         "wuxing": wuxing_count,
         "day_master": day_gan,
         "day_master_element": _WUXING.get(day_gan, ""),
+        "shengxiao": _ZHI_SHENGXIAO.get(year_zhi, ""),
+        "lunar_date": f"农历{lunar.getMonthInChinese()}月{lunar.getDayInChinese()}",
     }
 
 
@@ -103,9 +91,18 @@ def format_bazi_card(year: int, month: int, day: int, hour: int, gender: str) ->
     wuxing = bazi["wuxing"]
     wx_emojis = {"木": "🌿", "火": "🔥", "土": "🏔️", "金": "⚔️", "水": "💧"}
 
+    shengxiao = bazi.get("shengxiao", "")
+    lunar_date = bazi.get("lunar_date", "")
+    meta_bits = [f"公历 {year}年{month}月{day}日 {hour}时"]
+    if lunar_date:
+        meta_bits.append(lunar_date)
+    if shengxiao:
+        meta_bits.append(f"属{shengxiao}")
+    meta_bits.append(f"{gender}")
+
     lines = [
         "🎴 *八字命盘*",
-        f"📅 {year}年{month}月{day}日 {hour}时 | 性别：{gender}",
+        "📅 " + " | ".join(meta_bits),
         "",
         f"年柱：`{pillars['年柱']}`   月柱：`{pillars['月柱']}`",
         f"日柱：`{pillars['日柱']}`   时柱：`{pillars['时柱']}`",
@@ -154,9 +151,18 @@ async def interpret_bazi(
     wuxing_str = "、".join(f"{k}{v}个" for k, v in wuxing.items() if v > 0)
     pillar_str = " ".join(f"{k}[{v}]" for k, v in pillars.items())
 
+    shengxiao = bazi.get("shengxiao", "")
+    lunar_date = bazi.get("lunar_date", "")
+    birth_line = f"出生信息：公历 {year}年{month}月{day}日 {hour}时"
+    if lunar_date:
+        birth_line += f"（{lunar_date}）"
+    if shengxiao:
+        birth_line += f"，生肖属{shengxiao}"
+    birth_line += f"，性别：{gender}"
+
     user_prompt = (
-        f"出生信息：{year}年{month}月{day}日 {hour}时，性别：{gender}\n\n"
-        f"八字命盘（已计算）：\n{pillar_str}\n\n"
+        f"{birth_line}\n\n"
+        f"八字命盘（已按节气/立春精确排盘）：\n{pillar_str}\n\n"
         f"日主：{bazi['day_master']}（{bazi['day_master_element']}）\n"
         f"五行分布：{wuxing_str}\n\n"
         "请按照系统要求的维度给出完整命理解读。"

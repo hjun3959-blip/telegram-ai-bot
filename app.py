@@ -18,6 +18,7 @@ from routers.mingli import router as mingli_router
 from routers.owner_menu import router as owner_menu_router
 from routers.private import router as private_router
 from routers.rstory import router as rstory_router
+from services.automation_scheduler import AutomationScheduler
 from services.context_service import register_business_connection
 from services.daily_joke_scheduler import DailyJokeScheduler
 from services.rstory_store import close_store as close_rstory_store
@@ -74,6 +75,7 @@ async def main() -> None:
     db_inited = False
     rstory_inited = False
     daily_joke_scheduler: Optional[DailyJokeScheduler] = None
+    automation_scheduler: Optional[AutomationScheduler] = None
 
     try:
         await init_db()
@@ -110,6 +112,9 @@ async def main() -> None:
 
         daily_joke_scheduler = DailyJokeScheduler(bot)
         daily_joke_scheduler.start()
+        
+        automation_scheduler = AutomationScheduler()
+        automation_scheduler.start()
 
         if OXAPAY_WEBHOOK_ENABLED:
             try:
@@ -132,6 +137,11 @@ async def main() -> None:
                     await daily_joke_scheduler.stop()
                 except Exception as e:
                     logger.warning("daily_joke_scheduler stop failed | err=%s", e)
+            if automation_scheduler is not None:
+                try:
+                    await automation_scheduler.stop()
+                except Exception as e:
+                    logger.warning("automation_scheduler stop failed | err=%s", e)
 
     finally:
         await _shutdown(bot, webhook_runner, db_inited, rstory_inited)

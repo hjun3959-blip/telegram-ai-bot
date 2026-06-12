@@ -21,6 +21,7 @@ from types import SimpleNamespace
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatAction
 from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     BufferedInputFile,
     CallbackQuery,
@@ -208,24 +209,35 @@ def _normalize_tool_name(name: str) -> str:
     return name
 
 
-def _build_play_keyboard() -> InlineKeyboardMarkup:
-    """首页 4 个大入口按钮：做点图 / 好玩一下 / 小工具 / 怎么用。
+def _build_play_keyboard(*, owner: bool = False) -> InlineKeyboardMarkup:
+    """首页大入口按钮：做点图 / 好玩一下 / 算一算 / 小工具 / 怎么用。
 
-    所有 callback_data 都以 `home:` 或 `sub:` 开头；不会暴露任何隐藏管理入口。
+    所有面向所有人的 callback_data 都以 `home:` 开头，全部是安全的公开功能，
+    不会暴露任何隐藏管理入口。
+
+    owner=True 时（且必须是 owner 私聊，由调用方门禁保证）额外追加一行
+    「🛠️ 控制台」，callback_data=`ownmenu:home`，复用 owner_menu 路由里的
+    私信控制台（主脑 / GitHub / 神算子 等管理按钮）。owner_menu 回调里会再次复核
+    OWNER_MENU_ENABLED + owner + 私聊，Business / 群 / 普通用户 / 贝贝都进不来。
+
     保留 `_build_play_keyboard` 名称是为了兼容外部引用（旧 smoke test）。
     """
     rows = [
         [InlineKeyboardButton(text="📸 做点图", callback_data="home:make_image")],
         [InlineKeyboardButton(text="🎀 好玩一下", callback_data="home:fun")],
+        [InlineKeyboardButton(text="🔮 八字命理", callback_data="home:bazi")],
         [InlineKeyboardButton(text="🧰 小工具", callback_data="home:tools")],
         [InlineKeyboardButton(text="📖 怎么用", callback_data="home:howto")],
     ]
+    if owner:
+        # 仅 owner 私聊：把管理控制台挂在最下面，复用 ownmenu: 回调（自带门禁）
+        rows.append([InlineKeyboardButton(text="🛠️ 控制台", callback_data="ownmenu:home")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 # 别名：方便阅读
-def _build_home_keyboard() -> InlineKeyboardMarkup:
-    return _build_play_keyboard()
+def _build_home_keyboard(*, owner: bool = False) -> InlineKeyboardMarkup:
+    return _build_play_keyboard(owner=owner)
 
 
 def _row_back_home() -> list[InlineKeyboardButton]:
@@ -1268,7 +1280,9 @@ async def _send_entertainment_menu(message: Message, *, greeting: str | None = N
         pass
     body = BEIBEI_PLAY_MENU_TEXT if is_xp else PLAY_MENU_TEXT
     text = f"{greeting.strip()}\n\n{body}" if (greeting and greeting.strip()) else body
-    await message.answer(text, reply_markup=_build_home_keyboard())
+    # 仅 owner 私聊（且非贝贝）追加控制台入口；其余用户只看安全公开功能
+    owner = (not is_xp) and is_owner(message)
+    await message.answer(text, reply_markup=_build_home_keyboard(owner=owner))
 
 
 async def _retry_last_image_task(bot: Bot, message: Message) -> bool:
@@ -1422,13 +1436,35 @@ async def _safe_cb_ack(query: CallbackQuery, text: str | None = None) -> None:
         pass
 
 
+def _cb_is_owner(query: CallbackQuery) -> bool:
+    """回调里复核 owner：用 from_user + 回调所在私聊 chat 拼一个最小 message-like 探针。
+
+    仅当 chat 是 private（非 business / 群）且 from_user 命中 owner 时返回 True。
+    Business 回调的 message.chat.type 仍是 private，但 business_connection_id 非空，
+    这里据此区分；普通用户 / 贝贝命中不了 OWNER_USER_IDS / OWNER_USERNAMES。
+    """
+    msg = query.message
+    user = query.from_user
+    if not msg or not user:
+        return False
+    probe = SimpleNamespace(
+        from_user=user,
+        chat=msg.chat,
+        business_connection_id=getattr(msg, "business_connection_id", None),
+    )
+    if get_chat_mode(probe) != "private":
+        return False
+    return is_owner(probe)
+
+
 @router.callback_query(F.data.startswith("home:"))
-async def home_callback(query: CallbackQuery):
-    """首页大入口 + 返回首页 + howto 的统一回调。
+async def home_callback(query: CallbackQuery, state: FSMContext):
+    """首页大入口 + 返回首页 + howto + 八字命理 的统一回调。
 
     home:make_image / home:fun / home:tools  →  弹对应二级菜单
     home:howto                               →  弹「怎么用」详细文案
-    home:back                                →  回到首页
+    home:bazi                                →  进入八字命理 FSM（安全公开功能）
+    home:back                                →  回到首页（owner 私聊额外带控制台入口）
     """
     data = query.data or ""
     key = data.split(":", 1)[1] if ":" in data else ""
@@ -1462,6 +1498,22 @@ async def home_callback(query: CallbackQuery):
         await _safe_cb_ack(query)
         await msg.answer(HOW_TO_USE_TEXT, reply_markup=_build_back_home_keyboard())
         return
+    if key == "bazi":
+        # 🔮 八字命理：安全公开功能，复用 mingli FSM（任何用户私聊都可用）
+        await _safe_cb_ack(query)
+        try:
+            from routers.mingli import BaziStates, _gender_kb
+            await state.clear()
+            await state.set_state(BaziStates.ask_gender)
+            await msg.answer(
+                "🔮 *八字命理解读*\n\n请先告诉我你的性别：",
+                parse_mode="Markdown",
+                reply_markup=_gender_kb(),
+            )
+        except Exception as e:
+            logger.warning("home:bazi start failed | err=%s", e)
+            await msg.answer("🔮 八字命理暂时打不开，稍后再试。", reply_markup=_build_back_home_keyboard())
+        return
     if key == "back":
         await _safe_cb_ack(query)
         # 回首页：用首页文案 + 首页键盘（不再加 greeting，避免重复）
@@ -1471,7 +1523,8 @@ async def home_callback(query: CallbackQuery):
         except Exception:
             pass
         body = BEIBEI_PLAY_MENU_TEXT if is_xp else PLAY_MENU_TEXT
-        await msg.answer(body, reply_markup=_build_home_keyboard())
+        owner = (not is_xp) and _cb_is_owner(query)
+        await msg.answer(body, reply_markup=_build_home_keyboard(owner=owner))
         return
     if key == "retry_image":
         # 「🔁 再试一次」：从 retry_task 取出上次失败的 tool+style，重跑一次

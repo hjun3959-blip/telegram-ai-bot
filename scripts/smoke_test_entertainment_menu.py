@@ -186,19 +186,29 @@ async def main() -> None:
     assert "/宝宝" not in BEIBEI_PLAY_MENU_TEXT, "贝贝侧 /play 不应再提示 /宝宝"
     print("[ok] 首页文案极简、不直接铺命令列表，但保留功能区/直接发文字提示")
 
-    # ---------- 2) 首页键盘：4 个大入口 ----------
+    # ---------- 2) 首页键盘：5 个公开大入口（含八字命理），owner 私聊额外带控制台 ----------
+    PUBLIC_HOME_CBS = {"home:make_image", "home:fun", "home:bazi", "home:tools", "home:howto"}
     home_kb = _build_play_keyboard()
     home_cbs = _all_callback_data(home_kb)
-    assert set(home_cbs) == {"home:make_image", "home:fun", "home:tools", "home:howto"}, (
-        f"首页键盘应只有 4 个大入口 callback_data，实际：{home_cbs}"
+    assert set(home_cbs) == PUBLIC_HOME_CBS, (
+        f"公开首页键盘应为 5 个安全大入口 callback_data，实际：{home_cbs}"
     )
     home_labels = " ".join(_all_labels(home_kb))
-    for kw in ["做点图", "好玩一下", "小工具", "怎么用"]:
+    for kw in ["做点图", "好玩一下", "八字命理", "小工具", "怎么用"]:
         assert kw in home_labels, f"首页缺少入口 {kw}"
-    # 首页不应出现具体 play:* 按钮
+    # 公开首页不应出现具体 play:* 按钮，也不应出现任何 ownmenu:* 管理入口
     for cb in home_cbs:
         assert not cb.startswith("play:"), f"首页不应直接含 play:* 按钮: {cb}"
-    print("[ok] 首页键盘只含 4 大入口：📸 做点图 / 🎀 好玩一下 / 🧰 小工具 / 📖 怎么用")
+        assert not cb.startswith("ownmenu:"), f"公开首页不应含 ownmenu:* 管理入口: {cb}"
+    print("[ok] 公开首页键盘含 5 大入口：📸 做点图 / 🎀 好玩一下 / 🔮 八字命理 / 🧰 小工具 / 📖 怎么用")
+
+    # owner 私聊版：额外追加「🛠️ 控制台」→ ownmenu:home（owner_menu 回调自带门禁）
+    owner_home_kb = _build_play_keyboard(owner=True)
+    owner_home_cbs = set(_all_callback_data(owner_home_kb))
+    assert PUBLIC_HOME_CBS <= owner_home_cbs, "owner 首页应包含全部公开入口"
+    assert "ownmenu:home" in owner_home_cbs, "owner 首页应追加控制台入口 ownmenu:home"
+    assert "🛠️ 控制台" in " ".join(_all_labels(owner_home_kb))
+    print("[ok] owner 私聊首页额外带「🛠️ 控制台」(ownmenu:home)，公开首页不含")
 
     # ---------- 3) 二级菜单分组正确 + 都带返回首页 ----------
     mk = _build_make_image_keyboard()
@@ -263,11 +273,14 @@ async def main() -> None:
     sent_text = call.args[0] if call.args else call.kwargs.get("text", "")
     sent_markup = call.kwargs.get("reply_markup")
     assert isinstance(sent_markup, InlineKeyboardMarkup)
-    assert set(_all_callback_data(sent_markup)) == {"home:make_image", "home:fun", "home:tools", "home:howto"}
+    assert set(_all_callback_data(sent_markup)) == PUBLIC_HOME_CBS
+    # 普通用户不应看到任何 ownmenu:* 管理入口
+    for cb in _all_callback_data(sent_markup):
+        assert not cb.startswith("ownmenu:"), f"普通用户 /start 不应含管理入口 {cb}"
     # 不应直接铺命令
     for cmd in ("/plog", "/magnet", "/y2k", "/poster"):
         assert cmd not in sent_text, f"/start 首页消息不应直接列出 {cmd}"
-    print("[ok] /start 在 private 弹首页（4 大入口，不铺命令）")
+    print("[ok] /start 在 private 弹首页（5 大入口，不铺命令，普通用户无管理入口）")
 
     # ---------- 7) /play private 弹首页 ----------
     msg2 = _fake_private_message("/play")
@@ -279,8 +292,10 @@ async def main() -> None:
     call = msg2.answer.await_args
     sent_markup = call.kwargs.get("reply_markup")
     assert isinstance(sent_markup, InlineKeyboardMarkup)
-    assert set(_all_callback_data(sent_markup)) == {"home:make_image", "home:fun", "home:tools", "home:howto"}
-    print("[ok] /play 在 private 弹首页（4 大入口）")
+    assert set(_all_callback_data(sent_markup)) == PUBLIC_HOME_CBS
+    for cb in _all_callback_data(sent_markup):
+        assert not cb.startswith("ownmenu:"), f"普通用户 /play 不应含管理入口 {cb}"
+    print("[ok] /play 在 private 弹首页（5 大入口，普通用户无管理入口）")
 
     # ---------- 8) 贝贝侧 /start /play P0（关键词触发版）：不弹菜单、不再提示任何 / 命令 ----------
     for cmd in ("/start", "/play"):
@@ -308,6 +323,9 @@ async def main() -> None:
     print("[ok] 贝贝侧 /start /play 不弹菜单、不提示任何 / 命令；只关系唤醒 + 「你直接说就行」")
 
     # ---------- 9) home:* callback：弹对应二级菜单 / howto / 返回首页 ----------
+    fake_state = MagicMock()
+    fake_state.clear = AsyncMock()
+    fake_state.set_state = AsyncMock()
     for key, expected_sub_cbs in [
         ("make_image", expected_image_keys),
         ("fun", expected_fun_keys),
@@ -315,7 +333,7 @@ async def main() -> None:
     ]:
         cb = _fake_callback(f"home:{key}")
         with patch.object(private_mod, "is_xiaopang", AsyncMock(return_value=False)):
-            await private_mod.home_callback(cb)
+            await private_mod.home_callback(cb, fake_state)
         assert cb.message.answer.await_count == 1
         sub_call = cb.message.answer.await_args
         sub_kb = sub_call.kwargs.get("reply_markup")
@@ -327,20 +345,39 @@ async def main() -> None:
     # home:howto
     cb_h = _fake_callback("home:howto")
     with patch.object(private_mod, "is_xiaopang", AsyncMock(return_value=False)):
-        await private_mod.home_callback(cb_h)
+        await private_mod.home_callback(cb_h, fake_state)
     h_call = cb_h.message.answer.await_args
     h_text = h_call.args[0] if h_call.args else h_call.kwargs.get("text", "")
     assert h_text and "使用说明" in h_text
     assert "home:back" in _all_callback_data(h_call.kwargs["reply_markup"])
 
-    # home:back
+    # home:back（普通用户回到公开首页，无控制台入口）
     cb_back = _fake_callback("home:back")
     with patch.object(private_mod, "is_xiaopang", AsyncMock(return_value=False)):
-        await private_mod.home_callback(cb_back)
+        await private_mod.home_callback(cb_back, fake_state)
     back_call = cb_back.message.answer.await_args
     back_kb = back_call.kwargs.get("reply_markup")
-    assert set(_all_callback_data(back_kb)) == {"home:make_image", "home:fun", "home:tools", "home:howto"}
+    assert set(_all_callback_data(back_kb)) == PUBLIC_HOME_CBS
+    for cb_data in _all_callback_data(back_kb):
+        assert not cb_data.startswith("ownmenu:"), "普通用户 home:back 不应含管理入口"
     print("[ok] home:make_image / home:fun / home:tools / home:howto / home:back 行为正确")
+
+    # ---------- 9b) home:bazi：进入八字命理 FSM（安全公开功能，复用 mingli） ----------
+    from routers.mingli import BaziStates
+    cb_bazi = _fake_callback("home:bazi")
+    bazi_state = MagicMock()
+    bazi_state.clear = AsyncMock()
+    bazi_state.set_state = AsyncMock()
+    with patch.object(private_mod, "is_xiaopang", AsyncMock(return_value=False)):
+        await private_mod.home_callback(cb_bazi, bazi_state)
+    bazi_state.set_state.assert_awaited_once_with(BaziStates.ask_gender)
+    bazi_call = cb_bazi.message.answer.await_args
+    bazi_text = bazi_call.args[0] if bazi_call.args else bazi_call.kwargs.get("text", "")
+    assert "八字命理" in bazi_text
+    bazi_kb = bazi_call.kwargs.get("reply_markup")
+    bazi_cbs = _all_callback_data(bazi_kb)
+    assert any(c.startswith("bazi_gender_") for c in bazi_cbs), f"八字应弹性别选择键盘: {bazi_cbs}"
+    print("[ok] home:bazi 进入八字命理 FSM（ask_gender + 性别键盘），复用 mingli")
 
     # ---------- 10a) play:<image_tool> & play:<fun_text_tool> 应打开风格子菜单 ----------
     from routers.private import _STYLE_PRESETS, _build_style_picker_keyboard, _resolve_style_name, _style_usage_text
@@ -591,7 +628,7 @@ async def main() -> None:
     pend_svc.clear_pending_style(9001)
     cb_back = _fake_callback("home:back")
     with patch.object(private_mod, "is_xiaopang", AsyncMock(return_value=False)):
-        await private_mod.home_callback(cb_back)
+        await private_mod.home_callback(cb_back, fake_state)
     assert pend_svc.get_pending_style(9001) is None, "返回首页不应 set pending"
     # 「⬅️ 返回风格」也不应 set pending
     cb_rs = _fake_callback("style:img")
@@ -687,6 +724,43 @@ async def main() -> None:
         await private_mod.help_handler(biz_msg3)
     assert biz_help_send.await_count == 0
     print("[ok] Business 模式 /start /play /help 全部直接 return")
+
+    # ---------- 11b) /play owner vs 普通用户：控制台入口可见性 ----------
+    # owner 私聊：/play 首页额外带「🛠️ 控制台」(ownmenu:home)
+    owner_msg = _fake_private_message("/play", user_id=7777, username="owner_u")
+    with patch.object(private_mod, "is_xiaopang", AsyncMock(return_value=False)), \
+         patch.object(private_mod, "should_skip_message", lambda m: False), \
+         patch.object(private_mod, "get_chat_mode", lambda m: "private"), \
+         patch.object(private_mod, "is_owner", lambda m: True):
+        await private_mod.play_handler(owner_msg)
+    owner_kb = owner_msg.answer.await_args.kwargs.get("reply_markup")
+    owner_cbs = set(_all_callback_data(owner_kb))
+    assert "ownmenu:home" in owner_cbs, f"owner /play 应含控制台入口: {owner_cbs}"
+    assert PUBLIC_HOME_CBS <= owner_cbs, "owner /play 应同时含全部公开入口"
+    print("[ok] owner 私聊 /play 额外带「🛠️ 控制台」(ownmenu:home)")
+
+    # 普通用户私聊：/play 首页绝不含任何 ownmenu:* 管理入口
+    normal_msg = _fake_private_message("/play", user_id=8888, username="normal_u")
+    with patch.object(private_mod, "is_xiaopang", AsyncMock(return_value=False)), \
+         patch.object(private_mod, "should_skip_message", lambda m: False), \
+         patch.object(private_mod, "get_chat_mode", lambda m: "private"), \
+         patch.object(private_mod, "is_owner", lambda m: False):
+        await private_mod.play_handler(normal_msg)
+    normal_cbs = set(_all_callback_data(normal_msg.answer.await_args.kwargs.get("reply_markup")))
+    assert not any(c.startswith("ownmenu:") for c in normal_cbs), f"普通用户 /play 不应含管理入口: {normal_cbs}"
+    assert normal_cbs == PUBLIC_HOME_CBS
+    print("[ok] 普通用户 /play 只含公开安全入口，无任何 ownmenu:* 管理入口")
+
+    # 贝贝（is_xiaopang=True，非 owner）：/play 不弹菜单（关键词唤醒），更不含管理入口
+    beibei_msg = _fake_private_message("/play", user_id=6666, username="beibei_u")
+    with patch.object(private_mod, "is_xiaopang", AsyncMock(return_value=True)), \
+         patch.object(private_mod, "should_skip_message", lambda m: False), \
+         patch.object(private_mod, "get_chat_mode", lambda m: "private"), \
+         patch.object(private_mod, "is_owner", lambda m: False):
+        await private_mod.play_handler(beibei_msg)
+    bb_call = beibei_msg.answer.await_args
+    assert bb_call.kwargs.get("reply_markup") is None, "贝贝 /play 不应弹任何按钮菜单"
+    print("[ok] 贝贝（非 owner）/play 不弹菜单，自然无管理入口")
 
     # ---------- 12) 命令反馈机制（P0） ----------
     # 12a) 无照片：/plog /magnet /y2k /poster 都要回明确的「先发一张照片」状态提示
