@@ -190,12 +190,18 @@ async def _async_main():
 
     om.send_long_text = _fake_send_long_text
 
+    # owner_menu_callback 需要 FSMContext（仅 bazi 分支用到 clear/set_state）；其余分支不触碰。
+    from unittest.mock import AsyncMock, MagicMock
+    _dummy_state = MagicMock()
+    _dummy_state.clear = AsyncMock()
+    _dummy_state.set_state = AsyncMock()
+
     # ---- callback 路由：brain ----
     captured.clear()
     ra._active_session.pop("111", None)
     msg_b = _FakeMessage(None, 111, "ownerbot")
     cb_b = _FakeCallback("ownmenu:brain", 111, "owner", msg_b)
-    await om.owner_menu_callback(cb_b, bot=None)
+    await om.owner_menu_callback(cb_b, bot=None, state=_dummy_state)
     _ok("点主脑进入 brain 会话", ra._active_session.get("111") == "brain")
     _ok("点主脑有就绪提示", any("主脑" in t for t in captured))
 
@@ -204,7 +210,7 @@ async def _async_main():
     ra._active_session.pop("111", None)
     msg_g = _FakeMessage(None, 111, "ownerbot")
     cb_g = _FakeCallback("ownmenu:github", 111, "owner", msg_g)
-    await om.owner_menu_callback(cb_g, bot=None)
+    await om.owner_menu_callback(cb_g, bot=None, state=_dummy_state)
     _ok("点 GitHub 进入 github 会话", ra._active_session.get("111") == "github")
 
     # ---- callback 路由：copyfix 登记 pending ----
@@ -212,7 +218,7 @@ async def _async_main():
     pend.clear_pending_style(111)
     msg_c = _FakeMessage(None, 111, "ownerbot")
     cb_c = _FakeCallback("ownmenu:copyfix", 111, "owner", msg_c)
-    await om.owner_menu_callback(cb_c, bot=None)
+    await om.owner_menu_callback(cb_c, bot=None, state=_dummy_state)
     p = pend.get_pending_style(111)
     _ok("点文案优化登记 copyfix pending", p is not None and p.tool == "copyfix")
     pend.clear_pending_style(111)
@@ -227,14 +233,14 @@ async def _async_main():
         captured.clear()
         m = _FakeMessage(None, 111, "ownerbot")
         cb = _FakeCallback(data, 111, "owner", m)
-        await om.owner_menu_callback(cb, bot=None)
+        await om.owner_menu_callback(cb, bot=None, state=_dummy_state)
         _ok(f"回调 {data} 出结果含「{needle}」", any(needle in t for t in captured), f"got={captured}")
 
     # ---- 非 owner 点回调被拦截：不写 session、不登记 pending ----
     ra._active_session.pop("999", None)
     msg_x = _FakeMessage(None, 999, "stranger")
     cb_x = _FakeCallback("ownmenu:brain", 999, "stranger", msg_x)
-    await om.owner_menu_callback(cb_x, bot=None)
+    await om.owner_menu_callback(cb_x, bot=None, state=_dummy_state)
     _ok("非 owner 点回调被静默 ack", cb_x.acked is True)
     _ok("非 owner 点回调不进会话", "999" not in ra._active_session)
 
