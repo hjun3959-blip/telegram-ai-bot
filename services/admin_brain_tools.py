@@ -318,9 +318,11 @@ async def tool_run_shell(command: str) -> dict:
         if any(f in command for f in forbidden):
             return {"ok": False, "error": "Command contains forbidden patterns"}
 
+        # 机主专用管理工具：有意使用 shell=True（需支持管道、重定向等 shell 语法），
+        # 已配合上方危险命令黑名单与 30 秒超时限制。此处 Bandit B602 为有意豁免。
         result = subprocess.run(
             command,
-            shell=True,
+            shell=True,  # nosec B602
             capture_output=True,
             text=True,
             timeout=30,
