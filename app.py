@@ -13,6 +13,7 @@ from config import (
 from db.core import close_db, init_db
 from routers.admin_agent import router as admin_agent_router
 from routers.business import router as business_router
+from routers.chat_log_panel_router import router as chat_log_panel_router
 from routers.media import router as media_router
 from routers.mingli import router as mingli_router
 from routers.owner_menu import router as owner_menu_router
@@ -30,7 +31,6 @@ logger = setup_logging()
 
 
 async def _on_business_connection(connection: BusinessConnection) -> None:
-    """Handle BusinessConnection updates and register the connection."""
     try:
         await register_business_connection(connection)
     except Exception as e:
@@ -48,17 +48,13 @@ async def _shutdown(
     db_inited: bool,
     rstory_inited: bool,
 ) -> None:
-    """Unified resource cleanup to avoid repetition across error/normal paths."""
-    cleanup_tasks = [
-        (stop_webhook_server(webhook_runner), "webhook"),
-    ]
+    cleanup_tasks = [(stop_webhook_server(webhook_runner), "webhook")]
     if db_inited:
         cleanup_tasks.append((close_db(), "db"))
     if rstory_inited:
         cleanup_tasks.append((close_rstory_store(), "rstory"))
     if bot is not None:
         cleanup_tasks.append((bot.close(), "bot"))
-
     for coro, name in cleanup_tasks:
         try:
             await coro
@@ -91,8 +87,10 @@ async def main() -> None:
 
         # 命理路由优先于其他私信路由，避免 FSM 状态被拦截
         dp.include_router(mingli_router)
-
         dp.include_router(rstory_router)
+
+        # 全局记录采集面板：仅 owner 可用，无开关需要，常驻内存
+        dp.include_router(chat_log_panel_router)
 
         if ADMIN_AGENT_ENABLED:
             dp.include_router(admin_agent_router)
@@ -105,14 +103,14 @@ async def main() -> None:
         dp.include_router(media_router)
 
         logger.info(
-            "bot startup | routers=mingli,rstory,%s%sprivate,business,media",
+            "bot startup | routers=mingli,rstory,chat_log_panel,%s%sprivate,business,media",
             "admin_agent," if ADMIN_AGENT_ENABLED else "",
             "owner_menu," if OWNER_MENU_ENABLED else "",
         )
 
         daily_joke_scheduler = DailyJokeScheduler(bot)
         daily_joke_scheduler.start()
-        
+
         automation_scheduler = AutomationScheduler()
         automation_scheduler.start()
 
