@@ -1,12 +1,13 @@
 """管理员对话网关（owner-only，私聊 only）。
 
-让 owner 直接在私信里和两个助手自然对话：
+让 owner 直接在私信里和助手自然对话：
 - 主脑（OpenAI）：/主脑 <自然语言>，别名 /openai、/brain
+- 代码任务模式：/代码 <任务>，别名 /code；temperature=0.1，精准编码
 - GitHub 助手：/github <自然语言>，别名 /gh、/git
 
 两种用法：
 1. 单条直达：/主脑 帮我想想灰度方案  →  返回主脑回复
-2. 短会话模式（可选）：单独发 /主脑（或 /github）进入该助手会话，
+2. 短会话模式（可选）：单独发 /主脑（或 /github、/代码）进入该助手会话，
    之后 owner 的普通消息都转给该助手，直到 /退出（别名 /exit、/quit、/q）。
 
 安全边界（硬性）：
@@ -26,7 +27,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 
 from config import ADMIN_AGENT_ENABLED, GITHUB_REPO
-from services.admin_brain_service import ask_admin_brain, reset_history
+from services.admin_brain_service import ask_admin_brain, is_code_mode, reset_history, set_code_mode
 from services.context_service import get_chat_mode, is_owner
 from services.github_helper_service import handle_github_message
 from services.reply_service import send_long_text
@@ -36,10 +37,11 @@ logger = setup_logging()
 
 router = Router(name="admin_agent")
 
-# chat_id(str) -> "brain" | "github"：当前活跃的短会话目标。
+# chat_id(str) -> "brain" | "github" | "code"：当前活跃的短会话目标。
 _active_session: dict[str, str] = {}
 
 _BRAIN_CMDS = {"/主脑", "/openai", "/brain"}
+_CODE_CMDS = {"/代码", "/code"}
 _GITHUB_CMDS = {"/github", "/gh", "/git"}
 _EXIT_CMDS = {"/退出", "/exit", "/quit", "/q"}
 
@@ -62,6 +64,8 @@ async def _dispatch(bot: Bot, message: Message, target: str, payload: str) -> No
     owner_key = message.from_user.id if message.from_user else message.chat.id
     if target == "github":
         reply = await handle_github_message(owner_key, payload)
+    elif target == "code":
+        reply = await ask_admin_brain(owner_key, payload, force_code_mode=True)
     else:
         reply = await ask_admin_brain(owner_key, payload)
     await send_long_text(bot, message.chat.id, reply)
@@ -77,10 +81,30 @@ async def cmd_brain(message: Message, bot: Bot):
         _active_session[cid] = "brain"
         await send_long_text(
             bot, message.chat.id,
-            "（主脑已就绪）已进入主脑会话，直接发消息即可对话；发 /退出 结束。",
+            "🧠（主脑已就绪）已进入主脑会话，直接发消息即可对话；发 /退出 结束。",
         )
         return
     await _dispatch(bot, message, "brain", payload)
+
+
+@router.message(Command(commands=["代码", "code"]))
+async def cmd_code(message: Message, bot: Bot):
+    if not _owner_private(message):
+        return
+    payload = _arg_after_command(message.text or "")
+    cid = str(message.chat.id)
+    owner_key = message.from_user.id if message.from_user else message.chat.id
+    if not payload:
+        _active_session[cid] = "code"
+        set_code_mode(owner_key, True)
+        await send_long_text(
+            bot, message.chat.id,
+            "💻（代码任务模式 · temperature=0.1）已进入精准编码会话，直接发任务即可；发 /退出 结束。",
+        )
+        return
+    # 单条直达：force_code_mode=True，不改变持久会话状态
+    reply = await ask_admin_brain(owner_key, payload, force_code_mode=True)
+    await send_long_text(bot, message.chat.id, reply)
 
 
 @router.message(Command(commands=["github", "gh", "git"]))
@@ -93,7 +117,7 @@ async def cmd_github(message: Message, bot: Bot):
         _active_session[cid] = "github"
         await send_long_text(
             bot, message.chat.id,
-            f"（GitHub 助手已就绪 · 仓库 {GITHUB_REPO}）已进入 GitHub 会话，直接发消息即可；发 /退出 结束。\n"
+            f"🐙（GitHub 助手已就绪 · 仓库 {GITHUB_REPO}）已进入 GitHub 会话，直接发消息即可；发 /退出 结束。\n"
             "可问：仓库状态 / open PR / 最近 Actions / 安全告警。写操作需你本人确认。",
         )
         return
@@ -105,9 +129,10 @@ async def cmd_exit(message: Message, bot: Bot):
     if not _owner_private(message):
         return
     cid = str(message.chat.id)
+    owner_key = message.from_user.id if message.from_user else cid
     prev = _active_session.pop(cid, None)
-    if prev == "brain":
-        reset_history(message.from_user.id if message.from_user else cid)
+    if prev in ("brain", "code"):
+        reset_history(owner_key)
     if prev:
         await send_long_text(bot, message.chat.id, "已退出会话，恢复普通模式。")
     else:
