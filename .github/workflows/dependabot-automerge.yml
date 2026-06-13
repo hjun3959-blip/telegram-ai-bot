@@ -38,6 +38,21 @@ jobs:
           fi
 
           echo "Found Dependabot PR #${pr_number}."
+
+          # 仅自动合并「分组的 minor/patch 更新」；major 及其它更新保留人工审批。
+          head_ref="$(gh pr view "$pr_number" --repo "$REPO" --json headRefName --jq .headRefName)"
+          echo "PR 分支: ${head_ref}"
+          case "$head_ref" in
+            *app-deps*|*ci-actions*)
+              echo "属于 minor/patch 分组，符合自动合并条件。"
+              ;;
+            *)
+              echo "非 minor/patch 分组（疑似 major 或其它），跳过自动合并，保留人工审批。"
+              gh pr comment "$pr_number" --repo "$REPO" --body "检测到非 minor/patch 更新（疑似 major），已跳过自动合并，请人工审查后再合并。" || true
+              exit 0
+              ;;
+          esac
+
           checks="$(gh pr checks "$pr_number" --repo "$REPO" || true)"
           echo "$checks"
 
