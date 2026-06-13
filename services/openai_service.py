@@ -1,11 +1,12 @@
 """OpenAI/兼容 API 调用封装。
 
-本轮加固重点：
-- _extract_json_object 兼容代码块 ```json ... ```、首尾噪声、单引号等异常输出
-- _coerce_bool 把字符串 'false'/'False'/'0'/'no'/'否' 等正确解析为 False
-- _normalize_result 在空回复时给出合理的 should_reply 推断，不会把空字符串视为 True
-- call_openai 主模型失败时尝试 BACKUP_MODEL；BACKUP_MODEL 再失败时也不会再无限递归
-- 不会把任何密钥写入日志
+加固要点：
+- _MODE_PARAMS dict 统一管理各 mode 的 temperature / max_tokens
+- admin_brain mode: temperature=0.2, max_tokens=2000，适合代码/部署任务
+- _extract_json_object 兼容代码块、首尾噪声、单引号等异常输出
+- _coerce_bool 把字符串 'false'/'0'/'no' 等正确解析为 False
+- _normalize_result 在空回复时给出合理的 should_reply 推断
+- call_openai 主模型失败时尝试 BACKUP_MODEL
 """
 
 import asyncio
@@ -16,19 +17,32 @@ import re
 import aiofiles
 from openai import AsyncOpenAI
 
-from config import BACKUP_MODEL, OPENAI_API_KEY, OPENAI_BASE_URL, TRANSCRIBE_FALLBACK_MODELS, TRANSCRIBE_MODEL
+from config import (
+    ADMIN_BRAIN_MAX_TOKENS,
+    ADMIN_BRAIN_TEMPERATURE,
+    BACKUP_MODEL,
+    OPENAI_API_KEY,
+    OPENAI_BASE_URL,
+    TRANSCRIBE_FALLBACK_MODELS,
+    TRANSCRIBE_MODEL,
+)
 from utils.logger import setup_logging
 
 client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
 logger = setup_logging()
 
-
-# ---------- PATCH 3：私聊非 JSON 自然语言上限 ----------
 _PRIVATE_RAW_TEXT_MAX_CHARS = 3500
+
+# 各 mode 采样参数。admin_brain 低温保证代码任务稳定输出，token 放大支持长回复。
+_MODE_PARAMS: dict[str, dict] = {
+    "business":    {"temperature": 0.6, "max_tokens": 500},
+    "private":     {"temperature": 0.8, "max_tokens": 900},
+    "admin_brain": {"temperature": ADMIN_BRAIN_TEMPERATURE, "max_tokens": ADMIN_BRAIN_MAX_TOKENS},
+}
+_DEFAULT_PARAMS = {"temperature": 0.8, "max_tokens": 900}
 
 
 def _truncate_private_raw_text(text: str, max_chars: int = _PRIVATE_RAW_TEXT_MAX_CHARS) -> str:
-    """私聊非 JSON 自然语言截断到 max_chars，尽量在末尾标点处优雅断。"""
     if not text:
         return ""
     if len(text) <= max_chars:
@@ -41,8 +55,6 @@ def _truncate_private_raw_text(text: str, max_chars: int = _PRIVATE_RAW_TEXT_MAX
     return cut.strip()
 
 
-# ---------- PATCH 4：同 chat_id 串行锁 ----------
-# 弱引用思路只有在 cleanup 路径下才需要；这里 in-process 简单 dict。
 _chat_locks: dict[str, asyncio.Lock] = {}
 
 
@@ -58,9 +70,7 @@ def _get_chat_lock(chat_id) -> asyncio.Lock | None:
     return lock
 
 
-# ---------- PATCH 4：临时错误判定 + 退避 ----------
 def _is_transient_error(err: Exception) -> bool:
-    """仅 429 / timeout / 5xx / 连接错误算临时错误。其它错误不重试。"""
     name = err.__class__.__name__.lower()
     if "ratelimit" in name or "timeout" in name or "apiconnection" in name:
         return True
@@ -82,7 +92,6 @@ def fallback_private() -> dict:
 
 
 def fallback_business() -> dict:
-    # business 模式失败时优先静默，不要乱回。
     return {"reply_text": "", "sticker_type": None, "should_reply": False, "risk_note": ""}
 
 
@@ -94,23 +103,14 @@ _CODE_FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
 
 
 def _extract_json_object(raw: str) -> dict | None:
-    """从模型输出里尽力解析出一个 JSON 对象。
-
-    支持：
-    - 纯 JSON
-    - 代码块 ```json ... ``` 包裹
-    - 前后有噪声文本时取第一个 {...} 区间
-    """
     text = (raw or "").strip()
     if not text:
         return None
-    # 先尝试直接 parse
     try:
         result = json.loads(text)
         return result if isinstance(result, dict) else None
     except Exception:
         pass
-    # 尝试代码块
     m = _CODE_FENCE_RE.search(text)
     if m:
         inner = m.group(1).strip()
@@ -120,7 +120,6 @@ def _extract_json_object(raw: str) -> dict | None:
                 return result
         except Exception:
             pass
-    # 取第一个 {...}
     match = re.search(r"\{[\s\S]*\}", text)
     if not match:
         return None
@@ -129,7 +128,6 @@ def _extract_json_object(raw: str) -> dict | None:
         result = json.loads(candidate)
         return result if isinstance(result, dict) else None
     except Exception:
-        # 最后兜底：把单引号替换为双引号再试一次（仅当看上去像 JSON 时）
         try:
             result = json.loads(candidate.replace("'", '"'))
             return result if isinstance(result, dict) else None
@@ -142,11 +140,6 @@ _TRUE_STRS = {"true", "1", "yes", "y", "on", "是", "对", "真"}
 
 
 def _coerce_bool(value, default: bool) -> bool:
-    """把模型返回的各种类型都规范成 bool。
-
-    关键修复：字符串 'false'/'False'/'0' 之前会被 bool() 当成 True；
-    这里显式按字符串语义判断。
-    """
     if value is None:
         return default
     if isinstance(value, bool):
@@ -171,9 +164,7 @@ def _normalize_sticker(value) -> str | None:
     if not isinstance(value, str):
         return None
     token = value.strip()
-    if not token:
-        return None
-    if token.lower() in {"null", "none", "false"}:
+    if not token or token.lower() in {"null", "none", "false"}:
         return None
     return token
 
@@ -185,12 +176,10 @@ def _normalize_result(data: dict | None, mode: str) -> dict:
     sticker_type = _normalize_sticker(data.get("sticker_type"))
     if mode == "business":
         has_content = bool(reply_text or sticker_type)
-        # 如果字段缺失，应回退到“有内容才回”
         if "should_reply" in data:
             should_reply = _coerce_bool(data.get("should_reply"), default=has_content)
         else:
             should_reply = has_content
-        # 没有任何内容时强制静默，不让模型用 should_reply=true 但空内容触发奇怪发送
         if not has_content:
             should_reply = False
         risk_note = str(data.get("risk_note") or "").strip()
@@ -204,17 +193,12 @@ def _normalize_result(data: dict | None, mode: str) -> dict:
 
 
 async def _do_chat(model: str, messages: list, mode: str, response_json: bool = True):
-    """底层调用。
-
-    response_json=True（默认）：要求 JSON，返回 规范化后的 dict
-    response_json=False：不要求 JSON，返回 plain text。适用于“视觉摘要”这种
-    中间分析步骤。调用方拿到 plain text 后再拼给最终 JSON 主脑。
-    """
+    params = _MODE_PARAMS.get(mode, _DEFAULT_PARAMS)
     kwargs = dict(
         model=model,
         messages=messages,
-        temperature=0.6 if mode == "business" else 0.8,
-        max_tokens=500 if mode == "business" else 900,
+        temperature=params["temperature"],
+        max_tokens=params["max_tokens"],
     )
     if response_json:
         kwargs["response_format"] = {"type": "json_object"}
@@ -227,17 +211,9 @@ async def _do_chat(model: str, messages: list, mode: str, response_json: bool = 
         raw_text = raw.strip()
         logger.warning(
             "OpenAI invalid JSON | mode=%s | model=%s | raw_len=%s",
-            mode,
-            model,
-            len(raw),
+            mode, model, len(raw),
         )
-        # Claude/OpenAI-compatible routes can ignore response_format and return a
-        # perfectly usable natural-language reply. In private windows we do not
-        # need should_reply/risk_note, so preserve the answer instead of turning
-        # it into the annoying "刚才有点卡" fallback. Beibei-specific callers
-        # still sanitize the visible reply after this function returns.
-        if mode == "private" and raw_text:
-            # PATCH 3：私聊非 JSON 自然语言截断到 3500，避免 Telegram 4096 上限 + 防止日志/DB 爆炸
+        if mode in ("private", "admin_brain") and raw_text:
             truncated = _truncate_private_raw_text(raw_text, _PRIVATE_RAW_TEXT_MAX_CHARS)
             return _normalize_result({"reply_text": truncated, "sticker_type": None}, mode)
         raise ValueError(f"model returned non-json response: {model}")
@@ -245,10 +221,6 @@ async def _do_chat(model: str, messages: list, mode: str, response_json: bool = 
 
 
 async def _do_chat_with_retry(model: str, messages: list, mode: str, response_json: bool):
-    """PATCH 4：对单个 model 加上临时错误指数退避（2 / 4 / 8 秒，最多 3 次重试）。
-
-    非临时错误（鉴权 / 400 / JSON 解析）一次性 raise，由上层走 BACKUP_MODEL 或 fallback。
-    """
     backoffs = (2, 4, 8)
     last_err: Exception | None = None
     for attempt in range(len(backoffs) + 1):
@@ -278,18 +250,7 @@ async def call_openai(
     response_json: bool = True,
     chat_id: str | int | None = None,
 ):
-    """主调用入口。
-
-    response_json=True（默认）：返回 dict（含 reply_text 等字段）
-    response_json=False：返回 plain text（视觉摘要 / 中间分析专用）
-
-    PATCH 4：
-      - 新增可选 chat_id：同一 chat_id 串行执行；None 时不加锁，保持原行为
-      - 临时错误（429/timeout/5xx/连接）走 2/4/8 秒指数退避，最多 3 次
-
-    主模型失败时仍尝试 BACKUP_MODEL；BACKUP_MODEL 再失败回 mode 的 fallback dict。
-    日志只打 mode/model/err_type，**不写正文 / prompt / raw_text**。
-    """
+    """主调用入口。mode: business / private / admin_brain"""
     lock = _get_chat_lock(chat_id)
 
     async def _runner():
