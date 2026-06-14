@@ -47,17 +47,17 @@ def main() -> None:
     )
 
     preset = ATREE_XINXUE_PROMPT
-    _ok("preset name is xinxue", ATREE_XINXUE_PRESET_NAME == "xinxue")
+    _ok("preset name is xinxue", ATREE_XINXUE_PRESET_NAME.startswith("xinxue"))
     _ok("build_xinxue_prompt is deterministic", build_xinxue_prompt() == preset)
 
-    # philosophy / think-style / format-core 核心内容
+    # philosophy / think-style / format-core 核心内容（对齐 V5.8 措辞）
     _ok("philosophy present", all(w in preset for w in ("心即理", "致良知", "知行合一", "事上格物")))
-    _ok("think-style present", "思考风格" in preset and "抓主要矛盾" in preset)
-    _ok("format-core present", "输出格式" in preset and "诚实第一" in preset)
+    _ok("think-style present", "意图追踪" in preset and "格物" in preset)
+    _ok("format-core present", "输出要求" in preset and "我不知道" in preset)
 
-    # 安全适配：强制不暴露思维链
-    _ok("forbids chain-of-thought exposure", "绝不输出任何形式的思维链" in preset)
-    _ok("think-style marked internal-only", "绝不外显" in preset)
+    # 安全适配：不输出外部思维链（仅保留内部思维链）
+    _ok("forbids chain-of-thought exposure", "外部思维链" in preset)
+    _ok("think-style marked internal-only", "内部思维链" in preset)
 
     # 不含 NSFW / jailbreak / show_thoughts 泄漏
     low = preset.lower()

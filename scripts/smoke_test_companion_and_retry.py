@@ -159,8 +159,11 @@ async def main() -> None:
     bot.send_message.reset_mock()
     captured_retry.clear()
     cb_retry = _fake_callback("home:retry_image", user_id=7777)
+    fake_state = MagicMock()
+    fake_state.clear = AsyncMock()
+    fake_state.set_state = AsyncMock()
     with patch.object(private_mod, "run_plog_for_user", side_effect=fake_retry_run_plog):
-        await private_mod.home_callback(cb_retry)
+        await private_mod.home_callback(cb_retry, fake_state)
     assert captured_retry.get("plog") == ("奶油手账", True), f"home:retry_image 应触发重试: {captured_retry}"
     print("[ok] A4: home:retry_image 回调触发 _retry_last_image_task")
 
