@@ -1,0 +1,43 @@
+name: Deploy Probe (read-only)
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH read-only probe
+        env:
+          DEPLOY_SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT }}
+          DEPLOY_SSH_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_APP_PATH: ${{ secrets.DEPLOY_APP_PATH }}
+          DEPLOY_SERVICE_NAME: ${{ secrets.DEPLOY_SERVICE_NAME }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh; chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key; chmod 600 ~/.ssh/deploy_key
+          : > ~/.ssh/known_hosts
+          ssh-keyscan -p "$DEPLOY_SSH_PORT" -H "$DEPLOY_SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          remote='
+            set -uo pipefail
+            APP_PATH="$1"; SERVICE="$2"
+            echo "HOSTNAME=$(hostname)"
+            echo "WHOAMI=$(whoami)"
+            echo "SERVICE_ACTIVE=$(systemctl is-active "$SERVICE" 2>&1 || true)"
+            echo "SERVICE_ENABLED=$(systemctl is-enabled "$SERVICE" 2>&1 || true)"
+            if [ -d "$APP_PATH/.git" ]; then
+              echo "BRANCH=$(git -C "$APP_PATH" branch --show-current 2>&1 || true)"
+              echo "HEAD=$(git -C "$APP_PATH" log -1 --oneline 2>&1 || true)"
+              echo "DIRTY=$(git -C "$APP_PATH" status --porcelain 2>/dev/null | wc -l) changed files"
+            else
+              echo "APP_PATH_GIT=missing ($APP_PATH)"
+            fi
+            echo "UPTIME=$(uptime -p 2>&1 || true)"
+          '
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts -p "$DEPLOY_SSH_PORT" "${DEPLOY_SSH_USER}@${DEPLOY_SSH_HOST}" "bash -s -- '${DEPLOY_APP_PATH}' '${DEPLOY_SERVICE_NAME}'" <<< "$remote"
+      - name: cleanup
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
