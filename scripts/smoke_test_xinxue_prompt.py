@@ -55,8 +55,14 @@ def main() -> None:
     _ok("think-style present", "意图追踪" in preset and "格物" in preset)
     _ok("format-core present", "输出要求" in preset and "我不知道" in preset)
 
-    # 安全适配：不输出外部思维链（仅保留内部思维链）
-    _ok("forbids chain-of-thought exposure", "外部思维链" in preset)
+    # 安全适配：明确禁止输出外部思维链（保留内部思维链用于诚意自省）
+    _ok(
+        "forbids chain-of-thought exposure",
+        "不需要输出外部思维链" in preset
+        and "直接给出你的最终回答" in preset
+        and "不要包含" in preset
+        and "思考精华" in preset,
+    )
     _ok("think-style marked internal-only", "内部思维链" in preset)
 
     # 不含 NSFW / jailbreak / show_thoughts 泄漏
