@@ -1,53 +1,29 @@
-"""管理员对话网关（owner-only，私聊 only）。
-
-让 owner 直接在私信里和助手自然对话：
-- 主脑（OpenAI）：/主脑 <自然语言>，别名 /openai、/brain
-- 代码任务模式：/代码 <任务>，别名 /code；temperature=0.1，精准编码
-- GitHub 助手：/github <自然语言>，别名 /gh、/git
-
-两种用法：
-1. 单条直达：/主脑 帮我想想灰度方案  →  返回主脑回复
-2. 短会话模式（可选）：单独发 /主脑（或 /github、/代码）进入该助手会话，
-   之后 owner 的普通消息都转给该助手，直到 /退出（别名 /exit、/quit、/q）。
-
-安全边界（硬性）：
-- 必须 ADMIN_AGENT_ENABLED=true 才启用；否则整套路由 noop（命令也不响应）。
-- 仅 is_owner(message) 且 get_chat_mode == "private" 才触发。
-- Business / 群 / 贝贝 / 媒体路由都不会进到这里：本 router 只挂 private 文本 + Command。
-- 不执行任意 shell；GitHub 写/破坏性动作交由 github_helper_service 拒绝并要求 owner 确认。
-
-注册顺序：必须在 private_router（含 F.text 兜底）之前 include，
-会话兜底用函数过滤器，只在「owner+私聊+有活跃会话」时才命中，不会误吞其它消息。
 """
-
+routers/admin_agent.py  (已加 /think 入口)
+"""
 from __future__ import annotations
-
+import asyncio
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.types import Message
-
-from config import ADMIN_AGENT_ENABLED, GITHUB_REPO
-from services.admin_brain_service import ask_admin_brain, is_code_mode, reset_history, set_code_mode
+from config import ADMIN_AGENT_ENABLED, OPENAI_API_KEY, OPENAI_BASE_URL
+from api.mode_router import route_message, switch_mode, MODEL_MODES, EXIT_CMD
 from services.context_service import get_chat_mode, is_owner
-from services.github_helper_service import handle_github_message
 from services.reply_service import send_long_text
 from utils.logger import setup_logging
 
+
+def _is_pipeline_model(model: str) -> bool:
+    """轻量/快速模型不走 pipeline 拦截器。"""
+    return not any(x in str(model).lower() for x in ("lite", "brain", "mini", "flash"))
+
+
+
 logger = setup_logging()
-
 router = Router(name="admin_agent")
-
-# chat_id(str) -> "brain" | "github" | "code"：当前活跃的短会话目标。
-_active_session: dict[str, str] = {}
-
-_BRAIN_CMDS = {"/主脑", "/openai", "/brain"}
-_CODE_CMDS = {"/代码", "/code"}
-_GITHUB_CMDS = {"/github", "/gh", "/git"}
-_EXIT_CMDS = {"/退出", "/exit", "/quit", "/q"}
 
 
 def _owner_private(message: Message) -> bool:
-    """硬门禁：总开关 + owner + 私聊。任一不满足直接 False。"""
     if not ADMIN_AGENT_ENABLED:
         return False
     if get_chat_mode(message) != "private":
@@ -55,104 +31,143 @@ def _owner_private(message: Message) -> bool:
     return is_owner(message)
 
 
-def _arg_after_command(text: str) -> str:
-    parts = (text or "").strip().split(maxsplit=1)
-    return parts[1].strip() if len(parts) > 1 else ""
+def _make_llm_factory(bot: Bot):
+    from openai import AsyncOpenAI
+    client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL or None)
+
+    def factory(model: str, temperature: float, max_tokens: int, json_mode: bool = False):
+        async def call(messages: list[dict], system: str) -> str:
+            full = [{"role": "system", "content": system}] + messages
+            kwargs: dict = dict(model=model, messages=full, temperature=temperature, max_tokens=max_tokens)
+            if json_mode:
+                kwargs["response_format"] = {"type": "json_object"}
+            resp = await client.chat.completions.create(**kwargs)
+            return resp.choices[0].message.content or ""
+        from utils.llm_interceptor import make_intercepted_llm_call
+        _pipeline = _is_pipeline_model(model)
+        return make_intercepted_llm_call(call, pipeline_mode=_pipeline, clean_context=True)
+
+    return factory
 
 
-async def _dispatch(bot: Bot, message: Message, target: str, payload: str) -> None:
-    owner_key = message.from_user.id if message.from_user else message.chat.id
-    if target == "github":
-        reply = await handle_github_message(owner_key, payload)
-    elif target == "code":
-        reply = await ask_admin_brain(owner_key, payload, force_code_mode=True)
-    else:
-        reply = await ask_admin_brain(owner_key, payload)
+def _make_emit_progress(bot: Bot, chat_id: int):
+    async def emit(kind: str, text: str):
+        if text and text.strip():
+            await send_long_text(bot, chat_id, text)
+    return emit
+
+
+_MODE_CMDS = ["brain", "task", "deep", "code", "github"]
+_EXIT_CMDS = ["exit", "退出", "quit", "q"]
+_THINK_CMDS = ["think"]
+_ALL_CMDS = _MODE_CMDS + _EXIT_CMDS + _THINK_CMDS
+
+
+@router.message(Command(commands=_MODE_CMDS))
+async def cmd_switch_mode(message: Message, bot: Bot):
+    if not _owner_private(message):
+        return
+    cmd = (message.text or "").split()[0].lstrip("/").lower()
+    user_id = str(message.from_user.id if message.from_user else message.chat.id)
+    reply = await switch_mode(user_id, cmd)
     await send_long_text(bot, message.chat.id, reply)
 
 
-@router.message(Command(commands=["主脑", "openai", "brain"]))
-async def cmd_brain(message: Message, bot: Bot):
-    if not _owner_private(message):
-        return
-    payload = _arg_after_command(message.text or "")
-    cid = str(message.chat.id)
-    if not payload:
-        _active_session[cid] = "brain"
-        await send_long_text(
-            bot, message.chat.id,
-            "🧠（主脑已就绪）已进入主脑会话，直接发消息即可对话；发 /退出 结束。",
-        )
-        return
-    await _dispatch(bot, message, "brain", payload)
-
-
-@router.message(Command(commands=["代码", "code"]))
-async def cmd_code(message: Message, bot: Bot):
-    if not _owner_private(message):
-        return
-    payload = _arg_after_command(message.text or "")
-    cid = str(message.chat.id)
-    owner_key = message.from_user.id if message.from_user else message.chat.id
-    if not payload:
-        _active_session[cid] = "code"
-        set_code_mode(owner_key, True)
-        await send_long_text(
-            bot, message.chat.id,
-            "💻（代码任务模式 · temperature=0.1）已进入精准编码会话，直接发任务即可；发 /退出 结束。",
-        )
-        return
-    # 单条直达：force_code_mode=True，不改变持久会话状态
-    reply = await ask_admin_brain(owner_key, payload, force_code_mode=True)
-    await send_long_text(bot, message.chat.id, reply)
-
-
-@router.message(Command(commands=["github", "gh", "git"]))
-async def cmd_github(message: Message, bot: Bot):
-    if not _owner_private(message):
-        return
-    payload = _arg_after_command(message.text or "")
-    cid = str(message.chat.id)
-    if not payload:
-        _active_session[cid] = "github"
-        await send_long_text(
-            bot, message.chat.id,
-            f"🐙（GitHub 助手已就绪 · 仓库 {GITHUB_REPO}）已进入 GitHub 会话，直接发消息即可；发 /退出 结束。\n"
-            "可问：仓库状态 / open PR / 最近 Actions / 安全告警。写操作需你本人确认。",
-        )
-        return
-    await _dispatch(bot, message, "github", payload)
-
-
-@router.message(Command(commands=["退出", "exit", "quit", "q"]))
+@router.message(Command(commands=_EXIT_CMDS))
 async def cmd_exit(message: Message, bot: Bot):
     if not _owner_private(message):
         return
-    cid = str(message.chat.id)
-    owner_key = message.from_user.id if message.from_user else cid
-    prev = _active_session.pop(cid, None)
-    if prev in ("brain", "code"):
-        reset_history(owner_key)
-    if prev:
-        await send_long_text(bot, message.chat.id, "已退出会话，恢复普通模式。")
-    else:
-        await send_long_text(bot, message.chat.id, "当前没有进行中的会话。")
+    user_id = str(message.from_user.id if message.from_user else message.chat.id)
+    reply = await switch_mode(user_id, "exit")
+    await send_long_text(bot, message.chat.id, reply)
 
 
-def _has_active_session(message: Message) -> bool:
-    """会话兜底过滤器：只在 owner+私聊+该 chat 有活跃会话时才命中。
-
-    返回 False 时本 handler 不匹配，事件继续往后传给 private_router，不影响既有行为。
-    """
+# ── /think 三层 Agent 入口 ─────────────────────────────────────────────────────
+@router.message(Command(commands=_THINK_CMDS))
+async def cmd_think(message: Message, bot: Bot):
     if not _owner_private(message):
-        return False
-    return str(message.chat.id) in _active_session
-
-
-@router.message(F.text & ~F.text.startswith("/"), _has_active_session)
-async def session_text(message: Message, bot: Bot):
-    cid = str(message.chat.id)
-    target = _active_session.get(cid)
-    if not target:
         return
-    await _dispatch(bot, message, target, message.text or "")
+
+    # 提取 /think 后面的目标文本
+    text = (message.text or "").strip()
+    parts = text.split(None, 1)
+    goal = parts[1].strip() if len(parts) > 1 else ""
+
+    if not goal:
+        await send_long_text(bot, message.chat.id,
+            "🧠 **三层 Agent 模式**\n\n用法：`/think <目标描述>`\n\n"
+            "例：`/think 扫描 192.168.1.1 的开放端口并检测漏洞`\n"
+            "例：`/think 分析 /opt/myapp 的代码安全性`\n\n"
+            "架构：大脑层(拆解) → Shannon规划层(方案) → 执行层(无审查执行)")
+        return
+
+    await send_long_text(bot, message.chat.id, f"🚀 **启动三层 Agent**\n\n目标：{goal}\n\n⏳ 大脑层分析中…")
+
+    emit = _make_emit_progress(bot, message.chat.id)
+
+    try:
+        from core.think_pipeline import run_think_pipeline
+        report = await asyncio.wait_for(
+            run_think_pipeline(user_goal=goal, emit_progress=emit),
+            timeout=600,
+        )
+        await send_long_text(bot, message.chat.id, f"📋 **最终报告**\n\n{report}")
+    except asyncio.TimeoutError:
+        await send_long_text(bot, message.chat.id, "⏱ /think 执行超时（>10分钟）")
+    except Exception as e:
+        logger.exception("think pipeline failed | err=%s", e)
+        await send_long_text(bot, message.chat.id, f"❌ /think 出错：{e}")
+
+
+# ── 消息兜底（owner 私聊所有文字都走 route_message）──────────────────────────
+@router.message(F.text)
+async def handle_text(message: Message, bot: Bot):
+    if not _owner_private(message):
+        return
+
+    user_id  = str(message.from_user.id if message.from_user else message.chat.id)
+    username = (message.from_user.username or "") if message.from_user else ""
+    text     = message.text or ""
+
+    from api.mode_router import _get_state
+    state = _get_state(user_id)
+    if state.active_mode == "task":
+        await bot.send_chat_action(message.chat.id, "typing")
+        await send_long_text(bot, message.chat.id, "⚙️ 收到，开始执行任务…")
+
+    llm_factory = _make_llm_factory(bot)
+    emit        = _make_emit_progress(bot, message.chat.id)
+
+    try:
+        result = await asyncio.wait_for(
+            route_message(
+                user_id=user_id,
+                owner_key=user_id,
+                user_message=text,
+                llm_call_factory=llm_factory,
+                emit_progress=emit,
+                username=username,
+            ),
+            timeout=600,
+        )
+    except asyncio.TimeoutError:
+        try:
+            from api.ask_admin_brain_task import _get_fsm, _wb_key
+            _fsm = _get_fsm()
+            _ctx = await _fsm.load_or_create(str(user_id))
+            await _fsm.mark_interrupted(_ctx, reason="Telegram 层 600s 超时")
+        except Exception:
+            pass
+        await send_long_text(bot, message.chat.id,
+            "⏱ 任务执行时间较长已暂停（>10分钟）。\n\n"
+            "📌 **进度已保存，发送任意消息即可自动恢复继续。**")
+        return
+    except Exception as e:
+        logger.exception("route_message failed | err=%s", e)
+        await send_long_text(bot, message.chat.id, f"任务模式出错：{e}")
+        return
+
+    if result.reply:
+        await send_long_text(bot, message.chat.id, result.reply)
+    else:
+        logger.warning("route_message returned empty reply | user=%s | mode=%s", user_id, state.active_mode)
